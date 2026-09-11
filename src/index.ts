@@ -62,9 +62,12 @@ function doctor(): number {
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (/HTTP 401|HTTP 403/.test(message)) {
-      // Not a fault. Public projects read anonymously, which is the whole
-      // reason this server does not require credentials to start.
+    // Not a fault. Public projects read anonymously, which is the whole reason
+    // this server does not require credentials to start. The CLI says this two
+    // ways: it refuses locally when no token is stored, and it relays the
+    // server's 401 or 403 when a token is there but not accepted. Matching only
+    // the HTTP form reported the ordinary case as a broken installation.
+    if (/HTTP 401|HTTP 403|No Personal Access Token/i.test(message)) {
       process.stdout.write(
         'authenticated:  no (public projects still readable; run `cosense login` for private ones)\n',
       );

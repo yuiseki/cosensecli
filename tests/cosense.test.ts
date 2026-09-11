@@ -98,3 +98,39 @@ test('an unknown cosensecli command exits 2', () => {
   expect(status).toBe(2);
   expect(stderr).toContain('unknown command: sync');
 });
+
+test('doctor treats a locally missing token as unauthenticated, not broken', () => {
+  const ws = createTempWorkspace();
+  // The message the CLI actually prints when nothing is stored. It never
+  // reaches the server, so there is no HTTP status to match on.
+  const { stdout, status } = runCli(ws, ['doctor'], {
+    replies: {
+      whoami:
+        'EXIT:1:No Personal Access Token found for https://scrapbox.io. Run `cosense login https://scrapbox.io` to authenticate.',
+    },
+  });
+
+  expect(status).toBe(0);
+  expect(stdout).toContain('authenticated:  no');
+});
+
+test('doctor reports the default project it will use', () => {
+  const ws = createTempWorkspace();
+  const { stdout } = runCli(ws, ['doctor'], {
+    replies: { whoami: 'name: yuiseki' },
+    env: { COSENSECLI_DEFAULT_PROJECT: 'scrapbox.io/yuiseki' },
+  });
+
+  expect(stdout).toContain('default project: https://scrapbox.io/yuiseki');
+  expect(stdout).toContain('authenticated:  yes');
+});
+
+test('doctor refuses a default project that is a page URL', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['doctor'], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki/地図' },
+  });
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('must be a project URL, not a page URL');
+});
