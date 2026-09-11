@@ -1,0 +1,49 @@
+{
+  "name": "@yuiseki/cosensecli",
+  "version": "0.1.0",
+  "description": "A read-only MCP server for Cosense, wrapping the cosense CLI",
+  "main": "dist/index.js",
+  "bin": {
+    "cosensecli": "bin/cosensecli.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "docs"
+  ],
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build": "tsc",
+    "prepack": "npm run build",
+    "test": "npm run build && vitest run",
+    "test:watch": "vitest"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "cosense",
+    "scrapbox",
+    "mcp",
+    "cli"
+  ],
+  "author": "",
+  "license": "ISC",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "@helpfeel/cosense-cli": "^1.14.2",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
