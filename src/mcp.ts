@@ -21,6 +21,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { CosenseCommandError, resolveCosenseBin, runCosense } from './cosense';
+import {
+  DEFAULT_PROJECT_ENV,
+  defaultProjectUrl,
+  resolvePageUrl,
+  resolveProjectUrl,
+} from './defaults';
 
 function serverVersion(): string {
   // The published tarball always contains package.json, and dist/ sits one
@@ -29,6 +35,15 @@ function serverVersion(): string {
 }
 
 const DEFAULT_ORIGIN = 'https://scrapbox.io';
+
+/**
+ * The Cosense host to ask about when none was named. A default project on a
+ * self-hosted instance makes that instance the one to ask, not scrapbox.io.
+ */
+function defaultOrigin(): string {
+  const project = defaultProjectUrl();
+  return project === undefined ? DEFAULT_ORIGIN : new URL(project).origin;
+}
 
 /**
  * The note every page- or project-addressed tool carries.
@@ -48,13 +63,28 @@ const URL_NOTE =
 
 const PAGE_URL = z
   .string()
-  .min(1)
-  .describe(`The full page URL, e.g. https://scrapbox.io/help-jp/Cosense. ${URL_NOTE}`);
+  .optional()
+  .describe(
+    `The full page URL, e.g. https://scrapbox.io/help-jp/Cosense. ${URL_NOTE} ` +
+      'Give this or title, not both.',
+  );
+
+const TITLE = z
+  .string()
+  .optional()
+  .describe(
+    'The page title on its own, as search and the related page lists report ' +
+      'it. Resolved against project_url, or against the default project. Give ' +
+      'this or page_url, not both.',
+  );
 
 const PROJECT_URL = z
   .string()
-  .min(1)
-  .describe(`The project URL, e.g. https://scrapbox.io/help-jp. ${URL_NOTE}`);
+  .optional()
+  .describe(
+    `The project URL, e.g. https://scrapbox.io/help-jp. ${URL_NOTE} ` +
+      'Omit it to use the default project, which is what most questions mean.',
+  );
 
 const READ_ONLY_ANNOTATIONS = {
   readOnlyHint: true,
@@ -93,6 +123,20 @@ function call(command: string, args: string[]) {
   }
 }
 
+/**
+ * Builds a command and runs it, turning an argument problem into an error on
+ * that call. Resolving the project or the page can fail before anything runs,
+ * and a client needs to read why.
+ */
+function attempt(build: () => { command: string; args: string[] }) {
+  try {
+    const { command, args } = build();
+    return call(command, args);
+  } catch (error) {
+    return errorResult(error);
+  }
+}
+
 /** Appends `flag value` only when the value was given. */
 function optional(args: string[], flag: string, value: string | number | undefined): void {
   if (value === undefined) return;
@@ -113,12 +157,16 @@ export function buildServer(): McpServer {
         'Read one Cosense (formerly Scrapbox) page. Returns the metadata, the ' +
         'icons, a per-author summary of who wrote which lines, any Infobox, the ' +
         'body, and the 1-hop and 2-hop related page titles, as Markdown. Start ' +
-        'here when a page URL is known. The pageId and commitId it reports are ' +
-        'what cosense_page_changes needs later.',
-      inputSchema: { page_url: PAGE_URL },
+        'here once a page is identified, by title or by URL. The pageId and ' +
+        'commitId it reports are what cosense_page_changes needs later.',
+      inputSchema: { page_url: PAGE_URL, title: TITLE, project_url: PROJECT_URL },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ page_url }) => call('browsePage', [page_url]),
+    async ({ page_url, title, project_url }) =>
+      attempt(() => ({
+        command: 'browsePage',
+        args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
+      })),
   );
 
   server.registerTool(
@@ -131,10 +179,14 @@ export function buildServer(): McpServer {
         'neighbourhood is how the context around it shows up. A page with many ' +
         'backlinks or a high pageRank tends to act as a category. When the page ' +
         'defines an Infobox, this returns the literate database as a TSV table.',
-      inputSchema: { page_url: PAGE_URL },
+      inputSchema: { page_url: PAGE_URL, title: TITLE, project_url: PROJECT_URL },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ page_url }) => call('browseRelatedPages', [page_url]),
+    async ({ page_url, title, project_url }) =>
+      attempt(() => ({
+        command: 'browseRelatedPages',
+        args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
+      })),
   );
 
   server.registerTool(
@@ -156,12 +208,13 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, query, or, sort }) => {
-      const args = [project_url, query];
-      if (or) args.push('--or');
-      optional(args, '--sort', sort);
-      return call('searchFullText', args);
-    },
+    async ({ project_url, query, or, sort }) =>
+      attempt(() => {
+        const args = [resolveProjectUrl(project_url), query];
+        if (or) args.push('--or');
+        optional(args, '--sort', sort);
+        return { command: 'searchFullText', args };
+      }),
   );
 
   server.registerTool(
@@ -179,7 +232,11 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, query }) => call('searchVector', [project_url, query]),
+    async ({ project_url, query }) =>
+      attempt(() => ({
+        command: 'searchVector',
+        args: [resolveProjectUrl(project_url), query],
+      })),
   );
 
   server.registerTool(
@@ -201,13 +258,14 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, sort, limit, skip }) => {
-      const args = [project_url];
-      optional(args, '--sort', sort);
-      optional(args, '--limit', limit);
-      optional(args, '--skip', skip);
-      return call('listPages', args);
-    },
+    async ({ project_url, sort, limit, skip }) =>
+      attempt(() => {
+        const args = [resolveProjectUrl(project_url)];
+        optional(args, '--sort', sort);
+        optional(args, '--limit', limit);
+        optional(args, '--skip', skip);
+        return { command: 'listPages', args };
+      }),
   );
 
   server.registerTool(
@@ -229,11 +287,12 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, page_id, since }) => {
-      const args = [project_url, page_id];
-      optional(args, '--since', since);
-      return call('browsePageChanges', args);
-    },
+    async ({ project_url, page_id, since }) =>
+      attempt(() => {
+        const args = [resolveProjectUrl(project_url), page_id];
+        optional(args, '--since', since);
+        return { command: 'browsePageChanges', args };
+      }),
   );
 
   server.registerTool(
@@ -253,11 +312,15 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ file_url, project_url }) => {
-      const args = [file_url];
-      optional(args, '--project', project_url);
-      return call('readFileInfo', args);
-    },
+    async ({ file_url, project_url }) =>
+      attempt(() => {
+        const args = [file_url];
+        // The default project applies here too: a file URL carries no project,
+        // and a private one needs to be told which project may read it.
+        const project = project_url ?? defaultProjectUrl();
+        optional(args, '--project', project);
+        return { command: 'readFileInfo', args };
+      }),
   );
 
   server.registerTool(
@@ -277,10 +340,41 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ origin }) => call('listProjects', [origin ?? DEFAULT_ORIGIN]),
+    async ({ origin }) =>
+      attempt(() => ({
+        command: 'listProjects',
+        args: [origin ?? defaultOrigin()],
+      })),
   );
 
   return server;
+}
+
+/**
+ * Says on stderr which project a question with no project in it will be about.
+ * Without this line, a default set to the wrong project looks like Cosense
+ * having nothing to say on the subject.
+ */
+function reportDefaultProject(): void {
+  let configured: string | undefined;
+  try {
+    configured = defaultProjectUrl();
+  } catch (error) {
+    // A malformed default is worth failing over: every tool call would fail
+    // the same way, and the message would arrive as that page's problem.
+    throw new Error(
+      `${DEFAULT_PROJECT_ENV} is set but unusable. ` +
+        (error instanceof Error ? error.message : String(error)),
+    );
+  }
+  if (configured === undefined) {
+    console.error(
+      `cosensecli: no default project. Every tool call must name one; set ` +
+        `${DEFAULT_PROJECT_ENV} to change that.`,
+    );
+    return;
+  }
+  console.error(`cosensecli: default project is ${configured}.`);
 }
 
 /** Says on stderr what the server can reach, so a silent 401 is not a surprise. */
@@ -311,6 +405,7 @@ export async function runMcpServer(): Promise<void> {
     );
   }
 
+  reportDefaultProject();
   reportCredentialState();
 
   const server = buildServer();

@@ -8,6 +8,7 @@
  * enough around it to see whether the server will work.
  */
 import { READ_ONLY_COMMANDS, resolveCosenseBin, runCosense } from './cosense';
+import { DEFAULT_PROJECT_ENV, defaultProjectUrl } from './defaults';
 
 function cliVersion(): string {
   return require('../package.json').version as string;
@@ -31,15 +32,30 @@ are not reachable through this server; run them yourself with \`cosense\`.
 Credentials are the cosense CLI's own: ~/.cosense/settings.json, or COSENSE_PAT.
 A public project reads with no credentials at all.
 
+Set a default project and a question no longer has to name one, which is the
+point over MCP: "what did I write about X" rather than "in project Y, what did
+I write about X". Every tool still takes a project URL, and a given one wins.
+
 Environment:
-  COSENSECLI_COSENSE_BIN   the cosense executable to run, instead of the
-                           bundled @helpfeel/cosense-cli
+  COSENSECLI_DEFAULT_PROJECT  the project a call is about when it names none,
+                              e.g. https://scrapbox.io/yuiseki
+  COSENSECLI_COSENSE_BIN      the cosense executable to run, instead of the
+                              bundled @helpfeel/cosense-cli
 `;
 
 /** Prints whether the underlying CLI is present and answering. */
 function doctor(): number {
   const bin = resolveCosenseBin();
   process.stdout.write(`cosense binary: ${bin}\n`);
+  try {
+    const project = defaultProjectUrl();
+    process.stdout.write(
+      `default project: ${project ?? `none (set ${DEFAULT_PROJECT_ENV})`}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
   try {
     const { stdout } = runCosense('whoami', ['https://scrapbox.io']);
     process.stdout.write(`authenticated:  yes\n${stdout}`);

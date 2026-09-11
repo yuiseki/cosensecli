@@ -188,3 +188,97 @@ test('a bad argument is answered, not fatal', async () => {
   expect(tools.length).toBe(EXPECTED_TOOLS.length);
   expect(responses[0].result?.isError ?? responses[0].error).toBeTruthy();
 });
+
+const DEFAULT_PROJECT = { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki' };
+
+test('with a default project, a question need not name one', async () => {
+  const ws = createTempWorkspace();
+
+  await runMcp(ws, [{ name: 'cosense_search', arguments: { query: '地図' } }], {
+    env: DEFAULT_PROJECT,
+  });
+
+  expect(stubCalls(ws)).toEqual([
+    ['searchFullText', 'https://scrapbox.io/yuiseki', '地図'],
+  ]);
+});
+
+test('a named project still wins over the default', async () => {
+  const ws = createTempWorkspace();
+
+  await runMcp(
+    ws,
+    [
+      {
+        name: 'cosense_search',
+        arguments: { project_url: 'https://scrapbox.io/help-jp', query: '地図' },
+      },
+    ],
+    { env: DEFAULT_PROJECT },
+  );
+
+  expect(stubCalls(ws)).toEqual([
+    ['searchFullText', 'https://scrapbox.io/help-jp', '地図'],
+  ]);
+});
+
+test('a page can be asked for by title alone', async () => {
+  const ws = createTempWorkspace();
+
+  await runMcp(
+    ws,
+    [{ name: 'cosense_browse_page', arguments: { title: '地図 と AI' } }],
+    { env: DEFAULT_PROJECT },
+  );
+
+  expect(stubCalls(ws)).toEqual([
+    ['browsePage', 'https://scrapbox.io/yuiseki/地図_と_AI'],
+  ]);
+});
+
+test('the startup line says which project a bare question is about', async () => {
+  const ws = createTempWorkspace();
+  const { stderr } = await runMcp(ws, [], { env: DEFAULT_PROJECT });
+
+  expect(stderr).toContain('default project is https://scrapbox.io/yuiseki');
+});
+
+test('without a default, the startup line says every call must name one', async () => {
+  const ws = createTempWorkspace();
+  const { stderr } = await runMcp(ws, []);
+
+  expect(stderr).toContain('no default project');
+});
+
+test('a malformed default fails at startup rather than on every call', async () => {
+  const ws = createTempWorkspace();
+  const { tools, stderr } = await runMcp(ws, [], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki/地図' },
+  });
+
+  expect(tools).toEqual([]);
+  expect(stderr).toContain('must be a project URL, not a page URL');
+});
+
+test('with no default and no project, the call says how to set one', async () => {
+  const ws = createTempWorkspace();
+
+  const { responses } = await runMcp(ws, [
+    { name: 'cosense_search', arguments: { query: '地図' } },
+  ]);
+
+  expect(responses[0].result.isError).toBe(true);
+  expect(toolText(responses[0])).toContain('COSENSECLI_DEFAULT_PROJECT');
+  // Nothing ran: the problem was found before a process was started.
+  expect(stubCalls(ws)).toEqual([]);
+});
+
+test('cosense_list_projects follows the default project origin', async () => {
+  const ws = createTempWorkspace();
+
+  await runMcp(ws, [{ name: 'cosense_list_projects', arguments: {} }], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://cosense.example.com/team' },
+  });
+
+  expect(stubCalls(ws)).toEqual([['listProjects', 'https://cosense.example.com']]);
+});

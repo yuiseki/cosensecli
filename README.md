@@ -32,6 +32,23 @@ An MCP client gets no Skill, so what a Skill would have said has to travel in
 the tool descriptions instead. That is the one place this package adds rather
 than forwards. See [ADR 004](docs/ADR/004-descriptions-carry-the-wisdom.md).
 
+## A default project
+
+The `cosense` CLI has no current project: every command names one, which is
+right for a command line. Over MCP it is not, because naming the project in
+every sentence is the plumbing an assistant was meant to absorb.
+
+```bash
+export COSENSECLI_DEFAULT_PROJECT=https://scrapbox.io/yuiseki
+```
+
+With that set, "what did I write about maps" is answerable as asked. Every tool
+still takes `project_url`, and a given one wins, so other projects stay
+reachable through the same connector. The page tools also take a bare `title`
+once there is a default, since search answers in titles.
+
+See [ADR 005](docs/ADR/005-a-default-project.md).
+
 ## Install
 
 ```bash
@@ -80,7 +97,8 @@ Configured in a client:
   "mcpServers": {
     "cosense": {
       "command": "npx",
-      "args": ["-y", "@yuiseki/cosensecli", "--mcp-server"]
+      "args": ["-y", "@yuiseki/cosensecli", "--mcp-server"],
+      "env": { "COSENSECLI_DEFAULT_PROJECT": "https://scrapbox.io/yuiseki" }
     }
   }
 }
@@ -92,7 +110,7 @@ Eight, all read-only.
 
 | Tool | Answers |
 | --- | --- |
-| `cosense_browse_page` | One page, whole: metadata, icons, telomere, Infobox, body, related pages |
+| `cosense_browse_page` | One page, whole: metadata, icons, telomere, Infobox, body, related pages. By URL or by title |
 | `cosense_browse_related_pages` | The 1-hop and 2-hop neighbourhood of a page, or its literate database when the page defines an Infobox |
 | `cosense_search` | Full-text search across a project |
 | `cosense_search_vector` | Search by meaning, over titles and the link notation in bodies |
@@ -123,6 +141,7 @@ README says. Run the write commands yourself with `cosense`. See
 | --- | --- |
 | Credentials | `~/.cosense/settings.json`, written by `cosense login` |
 | `COSENSE_PAT` | a personal access token, and it wins over the stored one |
+| `COSENSECLI_DEFAULT_PROJECT` | the project a call is about when it names none |
 | `COSENSECLI_COSENSE_BIN` | the `cosense` executable to run, instead of the bundled one |
 
 There is no cache. The CLI underneath keeps none, so there is no stale day to
