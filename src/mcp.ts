@@ -430,7 +430,15 @@ function reportDefaultProject(): void {
   console.error(`cosensecli: default project is ${configured}.`);
 }
 
-/** Says on stderr what the server can reach, so a silent 401 is not a surprise. */
+/**
+ * Says on stderr what the server can reach, so a silent 401 is not a surprise.
+ *
+ * This is a snapshot of the moment the server started, not a standing fact.
+ * Credentials are read by the child process, and there is a fresh child per
+ * tool call, so a login performed while this server runs takes effect on the
+ * next call. The line says so, because a server that reported "no credentials"
+ * at boot would otherwise look like the reason a later call still failed.
+ */
 function reportCredentialState(): void {
   if (process.env.COSENSE_PAT && process.env.COSENSE_PAT.trim() !== '') {
     console.error('cosensecli: using COSENSE_PAT from the environment.');
@@ -442,8 +450,9 @@ function reportCredentialState(): void {
     return;
   }
   console.error(
-    'cosensecli: no credentials configured. Public projects still read fine; ' +
-      'a private one answers 401. Run `cosense login <origin>` to add one.',
+    'cosensecli: no credentials configured at startup. Public projects still ' +
+      'read fine; a private one answers 401. `cosense login <origin>` takes ' +
+      'effect on the next tool call, with no restart of this server.',
   );
 }
 

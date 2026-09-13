@@ -73,12 +73,45 @@ cosensecli doctor
 # authenticated:  no (public projects still readable; run `cosense login` for private ones)
 ```
 
-For a private project, log in with the CLI underneath, which is where the
-credentials live:
+## Private projects
+
+Everything above works with no credentials at all, because a public project
+reads anonymously. A private one answers 401 until you log in, and the
+credentials are the CLI's underneath, not this package's.
+
+There are two kinds, and which one you pick decides how much this server can
+reach:
 
 ```bash
-npx cosense login https://scrapbox.io
+cosense login https://scrapbox.io           # a personal access token
+cosense login https://scrapbox.io/yuiseki   # a service account, for one project
 ```
+
+A personal access token covers every project you belong to. A service account
+is registered against one project and covers only that one, so it is the way
+to hand an assistant part of your wiki rather than all of it. When both apply,
+the project's service account wins; `COSENSE_PAT` in the environment wins over
+both.
+
+Three things about this are easy to get wrong:
+
+- `cosense login` reads the secret with the terminal in raw mode, so it needs a
+  TTY. It cannot be run from a service manager, a hook or an assistant. Log in
+  at a terminal first, then start the server.
+- **A default project is not a permission.** `COSENSECLI_DEFAULT_PROJECT` only
+  fills in an argument that was left out, and every tool still accepts
+  `project_url`. Narrowing what this server can read is done by the credential,
+  never by the default.
+- Adding credentials does not need a restart. Each tool call spawns a fresh
+  `cosense`, which reads the settings file itself, so a login lands on the next
+  call. The line this server prints at startup is a snapshot of that moment and
+  says so; `cosensecli doctor` re-reads.
+
+Under a sandbox that mounts the home directory read-only, a settings file
+written after the service started is still visible, because the mount is of the
+live directory rather than a copy. The same sandbox stops anything here from
+writing it, which is the right way round: reading credentials is this server's
+job and writing them is not.
 
 ## MCP server
 
@@ -153,8 +186,8 @@ README says. Run the write commands yourself with `cosense`. See
 
 | | |
 | --- | --- |
-| Credentials | `~/.cosense/settings.json`, written by `cosense login` |
-| `COSENSE_PAT` | a personal access token, and it wins over the stored one |
+| Credentials | `~/.cosense/settings.json`, written by `cosense login`. Read here, never written |
+| `COSENSE_PAT` | a personal access token, and it wins over the stored ones |
 | `COSENSECLI_DEFAULT_PROJECT` | the project a call is about when it names none |
 | `COSENSECLI_COSENSE_BIN` | the `cosense` executable to run, instead of the bundled one |
 
@@ -175,5 +208,6 @@ points at a stub that records the argv it was called with and prints a canned
 answer, which is what makes the argument building testable at all.
 
 The decisions behind the shape of this thing are in [docs/ADR](docs/ADR),
-including why it wraps the CLI instead of reimplementing it, and why it starts
-without credentials.
+including why it wraps the CLI instead of reimplementing it, why it starts
+without credentials, and why reach is scoped by the credential rather than by
+the default project.

@@ -35,8 +35,11 @@ test('it starts without credentials, and says which projects that leaves reachab
   const { tools, stderr } = await runMcp(ws, []);
 
   expect(tools.length).toBe(EXPECTED_TOOLS.length);
-  expect(stderr).toContain('no credentials configured');
+  expect(stderr).toContain('no credentials configured at startup');
   expect(stderr).toContain('Public projects still read fine');
+  // The line has to say the state can change under it: credentials are read
+  // by the child, and there is a fresh child per call.
+  expect(stderr).toContain('no restart of this server');
 });
 
 test('COSENSE_PAT is reported instead, when it is set', async () => {

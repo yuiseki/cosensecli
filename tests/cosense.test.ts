@@ -134,3 +134,18 @@ test('doctor refuses a default project that is a page URL', () => {
   expect(status).toBe(1);
   expect(stderr).toContain('must be a project URL, not a page URL');
 });
+
+test('a fresh process per call is what lets credentials appear without a restart', () => {
+  const ws = createTempWorkspace();
+
+  // Two calls, two spawns. The claim in the startup message rests on this:
+  // nothing is carried between calls, so a settings file written after the
+  // server started is read by the next child.
+  runCli(ws, ['doctor'], { replies: { whoami: 'name: a' } });
+  runCli(ws, ['doctor'], { replies: { whoami: 'name: b' } });
+
+  expect(stubCalls(ws)).toEqual([
+    ['whoami', 'https://scrapbox.io'],
+    ['whoami', 'https://scrapbox.io'],
+  ]);
+});
