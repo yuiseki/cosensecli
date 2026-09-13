@@ -1,0 +1,42 @@
+version: 2
+
+updates:
+  # The three pull requests this file replaces were vite, rollup and picomatch,
+  # all of them transitive dependencies of vitest, each with its own pull
+  # request. One upgrade of vitest closed all three at once. Grouping is what
+  # keeps that from happening again: a week's updates arrive as one pull
+  # request per group, which is a thing worth reviewing rather than a queue.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Tokyo
+    open-pull-requests-limit: 5
+    groups:
+      production-dependencies:
+        applies-to: version-updates
+        dependency-type: production
+      development-dependencies:
+        applies-to: version-updates
+        dependency-type: development
+      # Security updates are grouped separately, because the default grouping
+      # above covers version updates only and an ungrouped advisory would
+      # otherwise arrive one pull request at a time again.
+      security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "04:00"
+      timezone: Asia/Tokyo
+    groups:
+      actions:
+        patterns:
+          - "*"

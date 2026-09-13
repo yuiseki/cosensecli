@@ -2,6 +2,14 @@
   "name": "@yuiseki/cosensecli",
   "version": "0.1.0",
   "description": "A read-only MCP server for Cosense, wrapping the cosense CLI",
+  "homepage": "https://github.com/yuiseki/cosensecli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuiseki/cosensecli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yuiseki/cosensecli/issues"
+  },
   "main": "dist/index.js",
   "bin": {
     "cosensecli": "bin/cosensecli.js"
@@ -30,7 +38,7 @@
     "mcp",
     "cli"
   ],
-  "author": "",
+  "author": "yuiseki",
   "license": "ISC",
   "engines": {
     "node": ">=24.0.0"

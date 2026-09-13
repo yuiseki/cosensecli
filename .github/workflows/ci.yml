@@ -1,0 +1,121 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor is 24, which is what @helpfeel/cosense-cli declares. This
+        # package runs that CLI as a child process on the same interpreter, so
+        # it cannot support a line the thing it spawns does not.
+        node: ['24.x', '26.x']
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx vitest run
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: npm
+      - run: npm ci
+      - name: Pack the published tarball
+        run: |
+          mkdir -p /tmp/pack
+          npm pack --pack-destination /tmp/pack
+
+      # Installed without hoisting, so the package can only resolve the
+      # dependencies it declares itself. This matters more here than in the
+      # sibling CLIs: the whole design rests on finding @helpfeel/cosense-cli
+      # and running it, and a hoisted tree would hide a missing declaration.
+      - name: Install the tarball with no hoisting
+        run: |
+          mkdir -p /tmp/smoke
+          cd /tmp/smoke
+          npm init -y
+          npm install --omit=dev --install-strategy=nested /tmp/pack/*.tgz
+
+      - name: The packed CLI runs on its declared dependencies alone
+        run: |
+          cd /tmp/smoke
+          ./node_modules/.bin/cosensecli --help
+
+      # doctor resolves the cosense binary and runs it. Without a token the CLI
+      # refuses locally, which doctor reports as an unauthenticated but working
+      # installation, so this passes with no account and no network.
+      - name: The cosense CLI underneath is found and answers
+        run: |
+          cd /tmp/smoke
+          ./node_modules/.bin/cosensecli doctor | tee doctor.txt
+          grep -q '@helpfeel/cosense-cli' doctor.txt
+          grep -q 'authenticated:' doctor.txt
+
+      # The MCP server pulls in the largest dependency this package has, and it
+      # is only reached through --mcp-server, so --help alone would not notice
+      # one missing from the packed dependencies.
+      - name: The MCP server answers a handshake under that install
+        run: |
+          cd /tmp/smoke
+          printf '%s\n' \
+            '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+            '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+            | timeout 30 ./node_modules/.bin/cosensecli --mcp-server > handshake.jsonl
+          cat handshake.jsonl
+          grep -q '"name":"cosensecli"' handshake.jsonl
+          grep -q '"cosense_browse_page"' handshake.jsonl
+          grep -q '"cosense_browse_related_pages"' handshake.jsonl
+          grep -q '"cosense_search"' handshake.jsonl
+          grep -q '"cosense_search_vector"' handshake.jsonl
+          grep -q '"cosense_list_pages"' handshake.jsonl
+          grep -q '"cosense_page_changes"' handshake.jsonl
+          grep -q '"cosense_read_file_info"' handshake.jsonl
+          grep -q '"cosense_list_projects"' handshake.jsonl
+
+      # Read-only is the security claim of this package, so the packed
+      # artefact is held to it rather than only the source tree. Every tool
+      # must carry readOnlyHint, and no write command may appear as a tool.
+      - name: Every packed tool is read-only
+        run: |
+          cd /tmp/smoke
+          node -e '
+            const fs = require("node:fs");
+            const lines = fs.readFileSync("handshake.jsonl", "utf8").trim().split("\n");
+            const listed = lines.map(JSON.parse).find((m) => m.id === 2);
+            const tools = listed.result.tools;
+            if (tools.length !== 8) throw new Error("expected 8 tools, got " + tools.length);
+            for (const tool of tools) {
+              if (tool.annotations?.readOnlyHint !== true) {
+                throw new Error(tool.name + " is missing readOnlyHint");
+              }
+              if (tool.annotations?.destructiveHint !== false) {
+                throw new Error(tool.name + " is missing destructiveHint: false");
+              }
+            }
+            const forbidden = ["edit", "delete", "upload", "submit", "replace", "login", "write"];
+            for (const tool of tools) {
+              for (const word of forbidden) {
+                if (tool.name.includes(word)) throw new Error(tool.name + " looks like a write tool");
+              }
+            }
+            console.log("8 tools, all read-only");
+          '
