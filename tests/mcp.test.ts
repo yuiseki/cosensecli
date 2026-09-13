@@ -282,3 +282,44 @@ test('cosense_list_projects follows the default project origin', async () => {
 
   expect(stubCalls(ws)).toEqual([['listProjects', 'https://cosense.example.com']]);
 });
+
+test('every tool call is logged for the journal, with its arguments', async () => {
+  const ws = createTempWorkspace();
+
+  const { stderr } = await runMcp(
+    ws,
+    [{ name: 'cosense_search', arguments: { query: '地図' } }],
+    { env: DEFAULT_PROJECT },
+  );
+
+  expect(stderr).toMatch(/\[cosense-mcp\] cosense_search ok \d+ms query="地図"/);
+});
+
+test('a refused call is logged as failed, not as ok', async () => {
+  const ws = createTempWorkspace();
+
+  // The handlers answer an HTTP error rather than throwing, so the audit line
+  // has to read isError. Matching only thrown errors logged every 401 as ok.
+  const { stderr } = await runMcp(
+    ws,
+    [{ name: 'cosense_browse_page', arguments: { title: '秘密' } }],
+    {
+      env: DEFAULT_PROJECT,
+      replies: { browsePage: 'EXIT:1:HTTP 401 Unauthorized' },
+    },
+  );
+
+  expect(stderr).toMatch(/\[cosense-mcp\] cosense_browse_page failed \d+ms/);
+  expect(stderr).not.toMatch(/cosense_browse_page ok/);
+});
+
+test('a call refused before a process starts is logged too', async () => {
+  const ws = createTempWorkspace();
+
+  const { stderr } = await runMcp(ws, [
+    { name: 'cosense_search', arguments: { query: '地図' } },
+  ]);
+
+  expect(stderr).toMatch(/\[cosense-mcp\] cosense_search failed \d+ms/);
+  expect(stubCalls(ws)).toEqual([]);
+});

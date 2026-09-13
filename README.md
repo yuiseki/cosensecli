@@ -121,6 +121,20 @@ Eight, all read-only.
 
 Each is one command of the `cosense` CLI, and returns what that command printed.
 
+### What it says on stderr
+
+Every call is announced: the tool, its arguments, whether it worked and how
+long it took.
+
+```
+[cosense-mcp] cosense_search ok 412ms query="地図"
+[cosense-mcp] cosense_browse_page failed 380ms title="秘密"
+```
+
+Under systemd that is the audit trail. It also means the titles and search
+terms a model asked about are written to the journal, which is worth knowing
+before pointing this at a private wiki.
+
 ## What it will not do
 
 The `cosense` CLI can edit, delete and upload. None of that is reachable here.

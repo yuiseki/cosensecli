@@ -93,11 +93,21 @@ const READ_ONLY_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
-function textResult(text: string) {
+/**
+ * What every tool returns. `isError` is what the audit log reads to tell a
+ * refused call from an answered one, so both helpers share the shape rather
+ * than one of them leaving the field off.
+ */
+type ToolResult = {
+  content: { type: 'text'; text: string }[];
+  isError?: boolean;
+};
+
+function textResult(text: string): ToolResult {
   return { content: [{ type: 'text' as const, text }] };
 }
 
-function errorResult(error: unknown) {
+function errorResult(error: unknown): ToolResult {
   const message = error instanceof Error ? error.message : String(error);
   return { content: [{ type: 'text' as const, text: message }], isError: true };
 }
@@ -143,6 +153,49 @@ function optional(args: string[], flag: string, value: string | number | undefin
   args.push(flag, String(value));
 }
 
+/**
+ * Every tool call is announced on stderr, with what it was asked and how long
+ * it took. stdout is the protocol, and a server that says nothing at all is
+ * indistinguishable from one that has hung.
+ *
+ * Under systemd this is the audit trail: which tool, which arguments, and
+ * whether it worked. The shape matches gyazocli's and hatebucli's, so one grep
+ * reads all of them. Arguments are included, which means the page titles and
+ * search terms a model asked about end up in the journal.
+ *
+ * A failure here is usually not a thrown error. The handlers turn a bad
+ * argument or an HTTP error into a result carrying isError, because a tool
+ * must answer rather than take the process down, so the flag is what says a
+ * call did not work. Logging only thrown errors would have recorded every
+ * 401 as ok.
+ */
+function logged<Args>(
+  name: string,
+  handler: (args: Args) => Promise<ToolResult>,
+): (args: Args) => Promise<ToolResult> {
+  return async (args: Args) => {
+    const startedAt = Date.now();
+    const given = Object.entries((args || {}) as Record<string, unknown>)
+      .filter(([, value]) => value !== undefined && value !== false)
+      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+      .join(' ');
+    try {
+      const result = await handler(args);
+      const outcome = result?.isError ? 'failed' : 'ok';
+      console.error(
+        `[cosense-mcp] ${name} ${outcome} ${Date.now() - startedAt}ms ${given}`.trimEnd(),
+      );
+      return result;
+    } catch (error: any) {
+      console.error(
+        `[cosense-mcp] ${name} failed ${Date.now() - startedAt}ms ${given}`.trimEnd(),
+        `- ${error?.message || error}`,
+      );
+      throw error;
+    }
+  };
+}
+
 export function buildServer(): McpServer {
   const server = new McpServer(
     { name: 'cosensecli', version: serverVersion() },
@@ -162,11 +215,11 @@ export function buildServer(): McpServer {
       inputSchema: { page_url: PAGE_URL, title: TITLE, project_url: PROJECT_URL },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ page_url, title, project_url }) =>
-      attempt(() => ({
-        command: 'browsePage',
-        args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
-      })),
+    logged('cosense_browse_page', async ({ page_url, title, project_url }) =>
+        attempt(() => ({
+          command: 'browsePage',
+          args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
+        })),),
   );
 
   server.registerTool(
@@ -182,11 +235,11 @@ export function buildServer(): McpServer {
       inputSchema: { page_url: PAGE_URL, title: TITLE, project_url: PROJECT_URL },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ page_url, title, project_url }) =>
-      attempt(() => ({
-        command: 'browseRelatedPages',
-        args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
-      })),
+    logged('cosense_browse_related_pages', async ({ page_url, title, project_url }) =>
+        attempt(() => ({
+          command: 'browseRelatedPages',
+          args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
+        })),),
   );
 
   server.registerTool(
@@ -208,13 +261,13 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, query, or, sort }) =>
-      attempt(() => {
-        const args = [resolveProjectUrl(project_url), query];
-        if (or) args.push('--or');
-        optional(args, '--sort', sort);
-        return { command: 'searchFullText', args };
-      }),
+    logged('cosense_search', async ({ project_url, query, or, sort }) =>
+        attempt(() => {
+          const args = [resolveProjectUrl(project_url), query];
+          if (or) args.push('--or');
+          optional(args, '--sort', sort);
+          return { command: 'searchFullText', args };
+        }),),
   );
 
   server.registerTool(
@@ -232,11 +285,11 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, query }) =>
-      attempt(() => ({
-        command: 'searchVector',
-        args: [resolveProjectUrl(project_url), query],
-      })),
+    logged('cosense_search_vector', async ({ project_url, query }) =>
+        attempt(() => ({
+          command: 'searchVector',
+          args: [resolveProjectUrl(project_url), query],
+        })),),
   );
 
   server.registerTool(
@@ -258,14 +311,14 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, sort, limit, skip }) =>
-      attempt(() => {
-        const args = [resolveProjectUrl(project_url)];
-        optional(args, '--sort', sort);
-        optional(args, '--limit', limit);
-        optional(args, '--skip', skip);
-        return { command: 'listPages', args };
-      }),
+    logged('cosense_list_pages', async ({ project_url, sort, limit, skip }) =>
+        attempt(() => {
+          const args = [resolveProjectUrl(project_url)];
+          optional(args, '--sort', sort);
+          optional(args, '--limit', limit);
+          optional(args, '--skip', skip);
+          return { command: 'listPages', args };
+        }),),
   );
 
   server.registerTool(
@@ -287,12 +340,12 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ project_url, page_id, since }) =>
-      attempt(() => {
-        const args = [resolveProjectUrl(project_url), page_id];
-        optional(args, '--since', since);
-        return { command: 'browsePageChanges', args };
-      }),
+    logged('cosense_page_changes', async ({ project_url, page_id, since }) =>
+        attempt(() => {
+          const args = [resolveProjectUrl(project_url), page_id];
+          optional(args, '--since', since);
+          return { command: 'browsePageChanges', args };
+        }),),
   );
 
   server.registerTool(
@@ -312,15 +365,15 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ file_url, project_url }) =>
-      attempt(() => {
-        const args = [file_url];
-        // The default project applies here too: a file URL carries no project,
-        // and a private one needs to be told which project may read it.
-        const project = project_url ?? defaultProjectUrl();
-        optional(args, '--project', project);
-        return { command: 'readFileInfo', args };
-      }),
+    logged('cosense_read_file_info', async ({ file_url, project_url }) =>
+        attempt(() => {
+          const args = [file_url];
+          // The default project applies here too: a file URL carries no project,
+          // and a private one needs to be told which project may read it.
+          const project = project_url ?? defaultProjectUrl();
+          optional(args, '--project', project);
+          return { command: 'readFileInfo', args };
+        }),),
   );
 
   server.registerTool(
@@ -340,11 +393,11 @@ export function buildServer(): McpServer {
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    async ({ origin }) =>
-      attempt(() => ({
-        command: 'listProjects',
-        args: [origin ?? defaultOrigin()],
-      })),
+    logged('cosense_list_projects', async ({ origin }) =>
+        attempt(() => ({
+          command: 'listProjects',
+          args: [origin ?? defaultOrigin()],
+        })),),
   );
 
   return server;
