@@ -17,6 +17,7 @@
   "files": [
     "bin",
     "dist",
+    "LICENSE",
     "README.md",
     "docs"
   ],
@@ -39,7 +40,7 @@
     "cli"
   ],
   "author": "yuiseki",
-  "license": "ISC",
+  "license": "MIT",
   "engines": {
     "node": ">=24.0.0"
   },

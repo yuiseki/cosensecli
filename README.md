@@ -211,3 +211,8 @@ The decisions behind the shape of this thing are in [docs/ADR](docs/ADR),
 including why it wraps the CLI instead of reimplementing it, why it starts
 without credentials, and why reach is scoped by the credential rather than by
 the default project.
+
+## License
+
+MIT. The CLI this wraps, [`@helpfeel/cosense-cli`](https://github.com/helpfeel/cosense-cli),
+is MIT as well.
