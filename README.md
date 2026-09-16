@@ -64,8 +64,8 @@ cosensecli doctor       # is the CLI underneath usable, and am I logged in?
 cosensecli --mcp-server
 ```
 
-There is nothing to sync and nothing to configure. Every answer is live, and a
-public project reads with no credentials at all:
+Reading a page or searching is live, every time. A public project reads with no
+credentials at all:
 
 ```bash
 cosensecli doctor
@@ -150,9 +150,49 @@ Eight, all read-only.
 | `cosense_list_pages` | The pages of a project, sortable by backlinks or views to find the ones acting as categories |
 | `cosense_page_changes` | What changed on a page, including a rename, by pageId |
 | `cosense_read_file_info` | An attached file, and the text extracted from it |
+| `cosense_rank_pages` | The whole project ordered by size, backlinks, outgoing links, views or age |
 | `cosense_list_projects` | The projects the credentials belong to. The one tool that needs them |
 
-Each is one command of the `cosense` CLI, and returns what that command printed.
+All but `cosense_rank_pages` are one command of the `cosense` CLI, returning
+what that command printed.
+
+## Ranking a project
+
+Cosense will not sort by page size, and asking it to is not an error: an
+unknown sort falls back to update order, so the answer comes back looking
+plausible and being wrong. `cosense_rank_pages` orders the project here
+instead, over a local index.
+
+```
+ranked by: lines desc
+1. CCSE2018
+   lines 663 / chars 11524 / linked 0 / views 387
+```
+
+`lines`, `chars`, `linked`, `views`, `updated`, `created` and `title` come from
+the page list: 3206 pages is four requests and about half a megabyte, so the
+first ranking takes a few seconds and the next takes none.
+
+`links`, how many pages a page points at, is the expensive one. It lives in
+each page body, so the project is read a bite at a time, and every answer says
+how much of it is known:
+
+```
+bodies read: 40 of 3206 (1.2%), 3166 to go
+note: this ranking covers the pages read so far, not the whole project.
+```
+
+Calling again continues from there. For the whole project, run the bulk form
+without a connector waiting on it, from a terminal or a cron entry:
+
+```bash
+cosensecli crawl                  # the default project
+cosensecli crawl --budget 500     # stop after 500 pages
+```
+
+About 0.67s a page, most of it process startup rather than network, so a few
+thousand pages is the better part of an hour. Nothing already current is read
+again, so running it twice costs almost nothing.
 
 ### What it says on stderr
 
@@ -186,13 +226,27 @@ README says. Run the write commands yourself with `cosense`. See
 
 | | |
 | --- | --- |
+| Cache | `${COSENSECLI_CACHE_DIR:-~/.cache/cosensecli}/projects/<host>/<project>/` |
 | Credentials | `~/.cosense/settings.json`, written by `cosense login`. Read here, never written |
 | `COSENSE_PAT` | a personal access token, and it wins over the stored ones |
 | `COSENSECLI_DEFAULT_PROJECT` | the project a call is about when it names none |
+| `COSENSECLI_CACHE_DIR` | where the index and the link data are kept |
 | `COSENSECLI_COSENSE_BIN` | the `cosense` executable to run, instead of the bundled one |
 
-There is no cache. The CLI underneath keeps none, so there is no stale day to
-explain and no directory to make writable when the server runs sandboxed.
+The cache holds the page index and, for pages that have been read, their
+outgoing links. Under a megabyte for a 3206 page project, since page bodies are
+not kept.
+
+Every cached entry carries the `updated` the page list reported when it was
+written, and is used only while that token still matches. So the cache makes
+answers faster without making them older: an edited page is read again, and a
+page nobody touched is not. Nothing expires on a timer except the index itself,
+which is re-walked when it is more than fifteen minutes old.
+
+Reading never creates a directory, so the server still works under a sandbox
+with a read-only home, up to the point where it wants to write. Where that
+matters, `COSENSECLI_CACHE_DIR` has to be writable. See
+[ADR 007](docs/ADR/007-a-cache-with-invalidation.md).
 
 ## Development
 
@@ -209,8 +263,9 @@ answer, which is what makes the argument building testable at all.
 
 The decisions behind the shape of this thing are in [docs/ADR](docs/ADR),
 including why it wraps the CLI instead of reimplementing it, why it starts
-without credentials, and why reach is scoped by the credential rather than by
-the default project.
+without credentials, why reach is scoped by the credential rather than by the
+default project, and why the cache is as greedy as gyazocli's but validates
+what gyazocli never had to.
 
 ## License
 

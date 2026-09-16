@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted.
+Accepted. The remark below that there is nothing kept locally was true when
+this was written and is not any more; see
+[ADR 007](007-a-cache-with-invalidation.md). Nothing about the credential
+decision changes.
 
 ## Context
 

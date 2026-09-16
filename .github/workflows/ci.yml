@@ -88,6 +88,7 @@ jobs:
           grep -q '"cosense_search_vector"' handshake.jsonl
           grep -q '"cosense_list_pages"' handshake.jsonl
           grep -q '"cosense_page_changes"' handshake.jsonl
+          grep -q '"cosense_rank_pages"' handshake.jsonl
           grep -q '"cosense_read_file_info"' handshake.jsonl
           grep -q '"cosense_list_projects"' handshake.jsonl
 
@@ -102,7 +103,7 @@ jobs:
             const lines = fs.readFileSync("handshake.jsonl", "utf8").trim().split("\n");
             const listed = lines.map(JSON.parse).find((m) => m.id === 2);
             const tools = listed.result.tools;
-            if (tools.length !== 8) throw new Error("expected 8 tools, got " + tools.length);
+            if (tools.length !== 9) throw new Error("expected 9 tools, got " + tools.length);
             for (const tool of tools) {
               if (tool.annotations?.readOnlyHint !== true) {
                 throw new Error(tool.name + " is missing readOnlyHint");
@@ -117,5 +118,5 @@ jobs:
                 if (tool.name.includes(word)) throw new Error(tool.name + " looks like a write tool");
               }
             }
-            console.log("8 tools, all read-only");
+            console.log("9 tools, all read-only");
           '
