@@ -28,7 +28,7 @@ import {
   resolvePageUrl,
   resolveProjectUrl,
 } from './defaults';
-import { getIndex, rankPages, type RankKey } from './pages';
+import { getIndex, rankPages, rankableCount, type RankKey } from './pages';
 
 function serverVersion(): string {
   // The published tarball always contains package.json, and dist/ sits one
@@ -428,14 +428,27 @@ export function buildServer(): McpServer {
       attemptDirect(() => {
         const project = resolveProjectUrl(project_url);
         const { index, refreshed, ageSeconds } = getIndex(project, { refresh });
-        const rows = rankPages(index, by as RankKey, { order, limit });
+        const key = by as RankKey;
+        const measurable = rankableCount(index, key);
 
+        // A key nothing carries is a broken ranking, not an empty one, and
+        // returning no rows would read as "the project has no such pages".
+        if (measurable === 0) {
+          throw new Error(
+            `No page in ${project} carries a usable ${by} value, so it cannot be ` +
+              'ranked by that. Try refresh: true, or rank by lines, chars, ' +
+              'linked or views, which come straight from the page list.',
+          );
+        }
+
+        const rows = rankPages(index, key, { order, limit });
         const header = [
           `project: ${project}`,
           `pages in project: ${index.count}`,
           `pages in index: ${index.pages.length}${index.truncated ? ' (partial: the walk hit its request budget)' : ''}`,
-          `index: ${refreshed ? 'just walked' : `${Math.round(ageSeconds)}s old`}`,
           `ranked by: ${by} ${order ?? (by === 'title' ? 'asc' : 'desc')}`,
+          `measurable by ${by}: ${measurable}${measurable < index.pages.length ? ` of ${index.pages.length}` : ''}`,
+          `index: ${refreshed ? 'just walked' : `${Math.round(ageSeconds)}s old`}`,
           '',
         ];
         const body = rows.map((entry, position) => {

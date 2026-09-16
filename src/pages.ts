@@ -13,7 +13,13 @@
  * looking plausible and be wrong. Ranking here, over the index, is the only
  * way to get one that is right.
  */
-import { loadIndex, saveIndex, type IndexEntry, type ProjectIndex } from './cache';
+import {
+  INDEX_VERSION,
+  loadIndex,
+  saveIndex,
+  type IndexEntry,
+  type ProjectIndex,
+} from './cache';
 import { runCosense, type CosenseResult } from './cosense';
 
 /**
@@ -50,13 +56,45 @@ function toNumber(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
+/**
+ * A timestamp as the CLI reports it, kept whole and also parsed.
+ *
+ * The CLI rewrites created/updated/accessed into a human form before printing:
+ * "2025-03-12T19:13+09:00 (2 years ago)". An earlier version of this file ran
+ * that through Number() and stored 0 for every page, which is the failure this
+ * shape exists to prevent. The token is what validation compares; the parsed
+ * value is only for ordering, and is null rather than 0 when the parse fails,
+ * so a missing timestamp cannot pass for an old one.
+ *
+ * A raw unix-seconds number is still accepted, in case the CLI stops
+ * enriching, or another caller hands us the API's own shape.
+ */
+function toTimestamp(value: unknown): { token: string; epochMs: number | null } {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return { token: String(value), epochMs: value * 1000 };
+  }
+  if (typeof value !== 'string' || value.trim() === '') {
+    return { token: '', epochMs: null };
+  }
+  const token = value.trim();
+  // The absolute part runs up to the space before the parenthesised relative
+  // form, and is what Date can read.
+  const absolute = token.split(' ')[0] as string;
+  const parsed = Date.parse(absolute);
+  return { token, epochMs: Number.isFinite(parsed) ? parsed : null };
+}
+
 function toEntry(raw: RawPage): IndexEntry | null {
   if (typeof raw.id !== 'string' || typeof raw.title !== 'string') return null;
+  const updated = toTimestamp(raw.updated);
+  const created = toTimestamp(raw.created);
   return {
     id: raw.id,
     title: raw.title,
-    updated: toNumber(raw.updated),
-    created: toNumber(raw.created),
+    updated: updated.token,
+    updatedAt: updated.epochMs,
+    created: created.token,
+    createdAt: created.epochMs,
     linked: toNumber(raw.linked),
     views: toNumber(raw.views),
     linesCount: toNumber(raw.linesCount),
@@ -123,6 +161,7 @@ export function fetchIndex(
   }
 
   return {
+    version: INDEX_VERSION,
     project: projectUrl,
     fetchedAt: new Date().toISOString(),
     count,
@@ -184,15 +223,26 @@ export type RankKey =
   | 'created'
   | 'title';
 
-const RANK_VALUE: Record<RankKey, (entry: IndexEntry) => number | string> = {
+const RANK_VALUE: Record<RankKey, (entry: IndexEntry) => number | string | null> = {
   lines: (entry) => entry.linesCount,
   chars: (entry) => entry.charsCount,
   linked: (entry) => entry.linked,
   views: (entry) => entry.views,
-  updated: (entry) => entry.updated,
-  created: (entry) => entry.created,
+  updated: (entry) => entry.updatedAt,
+  created: (entry) => entry.createdAt,
   title: (entry) => entry.title,
 };
+
+/**
+ * How many entries carry a usable value for a key.
+ *
+ * A ranking by a key nothing has is not an empty ranking, it is a broken one,
+ * and the caller has to be able to tell the difference.
+ */
+export function rankableCount(index: ProjectIndex, by: RankKey): number {
+  const value = RANK_VALUE[by];
+  return index.pages.filter((entry) => value(entry) !== null).length;
+}
 
 /**
  * Orders the whole index by one key.
@@ -210,15 +260,19 @@ export function rankPages(
   const direction = order === 'asc' ? 1 : -1;
   const value = RANK_VALUE[by];
 
-  const sorted = [...index.pages].sort((left, right) => {
-    const a = value(left);
-    const b = value(right);
-    if (typeof a === 'string' || typeof b === 'string') {
-      return String(a).localeCompare(String(b), 'ja') * direction;
-    }
-    if (a === b) return left.title.localeCompare(right.title, 'ja');
-    return (a < b ? -1 : 1) * direction;
-  });
+  // A page with no usable value is not ranked at all. Sorting it as zero
+  // would put it at one end of the list as though that were its measurement.
+  const sorted = index.pages
+    .filter((entry) => value(entry) !== null)
+    .sort((left, right) => {
+      const a = value(left) as number | string;
+      const b = value(right) as number | string;
+      if (typeof a === 'string' || typeof b === 'string') {
+        return String(a).localeCompare(String(b), 'ja') * direction;
+      }
+      if (a === b) return left.title.localeCompare(right.title, 'ja');
+      return (a < b ? -1 : 1) * direction;
+    });
 
   const limit = options.limit ?? 20;
   return sorted.slice(0, limit);

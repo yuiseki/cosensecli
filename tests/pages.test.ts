@@ -29,12 +29,20 @@ function stubRunner(batches: any[]) {
   };
 }
 
+/**
+ * A page as `cosense listPages` actually prints one.
+ *
+ * The timestamps are the enriched form, not unix seconds. Writing this fixture
+ * with numbers is what hid the bug: Number() turned every real timestamp into
+ * 0, and the tests passed because they were asking about a shape the CLI does
+ * not produce.
+ */
 function page(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
     title: `page-${id}`,
-    updated: 1000,
-    created: 500,
+    updated: '2025-03-12T19:13+09:00 (2 years ago)',
+    created: '2018-07-10T07:40+09:00 (8 years ago)',
     linked: 0,
     views: 0,
     linesCount: 1,
@@ -258,4 +266,75 @@ test('the cache is keyed by host as well as project name', async () => {
   // The same name on a self-hosted instance is a different project, and
   // answering one with the other's pages would be silent.
   expect(a).not.toBe(b);
+});
+
+test('the enriched timestamp the CLI prints is kept whole, and parsed for ordering', async () => {
+  const { fetchIndex } = await import('../src/pages');
+  const batch = {
+    count: 2,
+    pages: [
+      page('a', { updated: '2025-03-12T19:13+09:00 (2 years ago)' }),
+      page('b', { updated: '2026-09-16T11:00+09:00 (1 hour ago)' }),
+    ],
+  };
+
+  await withStub([batch], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    const [a, b] = index.pages;
+
+    // The token is what a cached page is checked against, so it must survive
+    // exactly as printed rather than as something derived from it.
+    expect(a.updated).toBe('2025-03-12T19:13+09:00 (2 years ago)');
+    // Never 0. The whole validation axis rested on this and was silently dead.
+    expect(a.updatedAt).toBe(Date.parse('2025-03-12T19:13+09:00'));
+    expect(b.updatedAt!).toBeGreaterThan(a.updatedAt!);
+  });
+});
+
+test('a timestamp that cannot be read is null, not zero', async () => {
+  const { fetchIndex, rankPages, rankableCount } = await import('../src/pages');
+  const batch = {
+    count: 2,
+    pages: [
+      page('a', { title: 'dated', updated: '2025-03-12T19:13+09:00 (2 years ago)' }),
+      page('b', { title: 'undated', updated: undefined }),
+    ],
+  };
+
+  await withStub([batch], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    expect(index.pages.find((e) => e.title === 'undated')!.updatedAt).toBeNull();
+
+    // Ranked out rather than sorted as epoch zero, which would have placed it
+    // at one end of the list as though that were its measurement.
+    expect(rankPages(index, 'updated').map((e) => e.title)).toEqual(['dated']);
+    expect(rankableCount(index, 'updated')).toBe(1);
+    expect(rankableCount(index, 'lines')).toBe(2);
+  });
+});
+
+test('raw unix seconds are still accepted, in case the CLI stops enriching', async () => {
+  const { fetchIndex } = await import('../src/pages');
+
+  await withStub([{ count: 1, pages: [page('a', { updated: 1531180816 })] }], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    expect(index.pages[0].updatedAt).toBe(1531180816 * 1000);
+  });
+});
+
+test('an index written by an older build is discarded, not reinterpreted', async () => {
+  const { loadIndex, saveIndex } = await import('../src/cache');
+
+  saveIndex(PROJECT, {
+    version: 1,
+    project: PROJECT,
+    fetchedAt: new Date().toISOString(),
+    count: 1,
+    truncated: false,
+    pages: [],
+  } as any);
+
+  // Version 1 stored `updated` as a number that was always 0. Reading it as
+  // though it were version 2 would treat every page as validated.
+  expect(loadIndex(PROJECT)).toBeNull();
 });

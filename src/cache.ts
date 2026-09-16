@@ -21,13 +21,27 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-/** One page, as the page list reports it. */
+/**
+ * One page, as the page list reports it.
+ *
+ * `updated` is kept as the string the CLI printed rather than a number, and is
+ * compared for equality rather than ordering. The CLI formats timestamps for a
+ * reader ("2025-03-12T19:13+09:00 (2 years ago)"), so parsing one into a number
+ * is a second thing that can go wrong; treating it as an opaque token is both
+ * simpler and what validation actually needs, the way an ETag is used.
+ *
+ * `updatedAt` is that token parsed to epoch milliseconds, for ordering only,
+ * and is null when it could not be parsed. Null rather than 0: a page with no
+ * known timestamp must be distinguishable from one modified in 1970, because
+ * the first is a fault here and the second is data.
+ */
 export type IndexEntry = {
   id: string;
   title: string;
-  /** Unix seconds. The thing every cached copy is checked against. */
-  updated: number;
-  created: number;
+  updated: string;
+  updatedAt: number | null;
+  created: string;
+  createdAt: number | null;
   linked: number;
   views: number;
   linesCount: number;
@@ -35,7 +49,16 @@ export type IndexEntry = {
   pin: number;
 };
 
+/**
+ * Bumped when the shape of an entry changes, so an index written by an older
+ * build is discarded rather than read as though it meant the same thing. The
+ * first version stored `updated` as a number, which was always 0, because the
+ * CLI hands back a formatted string.
+ */
+export const INDEX_VERSION = 2;
+
 export type ProjectIndex = {
+  version: number;
   project: string;
   /** ISO 8601, when the walk that produced this finished. */
   fetchedAt: string;
@@ -89,7 +112,10 @@ export function loadIndex(projectUrl: string): ProjectIndex | null {
   const file = indexPath(projectUrl);
   if (!fs.existsSync(file)) return null;
   try {
-    return JSON.parse(fs.readFileSync(file, 'utf8')) as ProjectIndex;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as ProjectIndex;
+    // An index from an older build says nothing about what its fields mean.
+    if (parsed?.version !== INDEX_VERSION) return null;
+    return parsed;
   } catch {
     // A half-written index should send the caller to the network, not take
     // the call down.
@@ -135,10 +161,11 @@ export function pagePath(
 export type CachedPage = {
   id: string;
   title: string;
-  updated: number;
-  command: string;
+  /** The index token this was true at. Compared for equality, never ordered. */
+  updated: string;
+  /** Outgoing links, which are a property of this page's body alone. */
+  links: string[];
   cachedAt: string;
-  text: string;
 };
 
 export function loadPage(projectUrl: string, pageId: string): CachedPage | null {
