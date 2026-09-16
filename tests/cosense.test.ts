@@ -149,3 +149,48 @@ test('a fresh process per call is what lets credentials appear without a restart
     ['whoami', 'https://scrapbox.io'],
   ]);
 });
+
+test('crawl refuses a budget that is not a positive number', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['crawl', '--budget', 'lots'], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki' },
+  });
+
+  expect(status).toBe(2);
+  expect(stderr).toContain('--budget needs a positive number');
+});
+
+test('crawl says which project it is about, and needs one', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['crawl']);
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('COSENSECLI_DEFAULT_PROJECT');
+});
+
+test('crawl reads bodies and reports what it did', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 2,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+      { id: 'b', title: 'two', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+
+  const { stdout, status } = runCli(ws, ['crawl', '--budget', '1'], {
+    env: {
+      COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
+      COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
+    },
+    replies: {
+      listPages: JSON.stringify(listing),
+      readPage: JSON.stringify({ links: ['x'] }),
+    },
+  });
+
+  expect(status).toBe(0);
+  expect(stdout).toContain('index: 2 pages');
+  expect(stdout).toContain('read 1 in');
+  expect(stdout).toContain('1 to go');
+});

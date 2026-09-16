@@ -338,3 +338,100 @@ test('an index written by an older build is discarded, not reinterpreted', async
   // though it were version 2 would treat every page as validated.
   expect(loadIndex(PROJECT)).toBeNull();
 });
+
+test('a crawl reads page bodies up to its budget and keeps only the links', async () => {
+  const { fetchIndex, crawlLinks, knownLinkCounts } = await import('../src/pages');
+  const { loadPage } = await import('../src/cache');
+  const listing = {
+    count: 3,
+    pages: [page('a', { title: 'one' }), page('b', { title: 'two' }), page('c', { title: 'three' })],
+  };
+
+  await withStub([listing], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    const bodyRunner = (command: string, args: string[] = []) => {
+      calls.push([command, ...args]);
+      return { stdout: JSON.stringify({ links: ['x', 'y'] }), stderr: '' };
+    };
+
+    const report = crawlLinks(PROJECT, index, { budget: 2, delayMs: 0, runner: bodyRunner });
+    expect(report.fetched).toBe(2);
+    expect(report.remaining).toBe(1);
+    expect(report.current).toBe(0);
+
+    // The body is not kept: only what this page's own `updated` can validate.
+    const cached = loadPage(PROJECT, 'a')!;
+    expect(cached.links).toEqual(['x', 'y']);
+    expect(Object.keys(cached).sort()).toEqual(['cachedAt', 'id', 'links', 'title', 'updated']);
+
+    expect(knownLinkCounts(PROJECT, index).length).toBe(2);
+  });
+});
+
+test('a second crawl only reads what is not already current', async () => {
+  const { fetchIndex, crawlLinks } = await import('../src/pages');
+  const listing = { count: 2, pages: [page('a'), page('b')] };
+
+  await withStub([listing], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    const body = () => ({ stdout: JSON.stringify({ links: [] }), stderr: '' });
+
+    crawlLinks(PROJECT, index, { budget: 10, delayMs: 0, runner: body });
+    const second = crawlLinks(PROJECT, index, { budget: 10, delayMs: 0, runner: body });
+
+    expect(second.fetched).toBe(0);
+    expect(second.current).toBe(2);
+    expect(second.remaining).toBe(0);
+  });
+});
+
+test('an edited page is read again, because its token moved', async () => {
+  const { fetchIndex, crawlLinks, knownLinkCounts } = await import('../src/pages');
+  const before = { count: 1, pages: [page('a', { updated: '2025-01-01T00:00+09:00 (a year ago)' })] };
+  const after = { count: 1, pages: [page('a', { updated: '2026-09-16T11:00+09:00 (1 hour ago)' })] };
+
+  await withStub([before], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    crawlLinks(PROJECT, index, {
+      budget: 10,
+      delayMs: 0,
+      runner: () => ({ stdout: JSON.stringify({ links: ['old'] }), stderr: '' }),
+    });
+    expect(knownLinkCounts(PROJECT, index)[0].links).toBe(1);
+  });
+
+  await withStub([after], (runner) => {
+    const index = fetchIndex(PROJECT, { refresh: true, runner });
+    // The cached copy is not current any more, so it is not counted until it
+    // has been read again. A merge would have kept the old links alive.
+    expect(knownLinkCounts(PROJECT, index).length).toBe(0);
+
+    crawlLinks(PROJECT, index, {
+      budget: 10,
+      delayMs: 0,
+      runner: () => ({ stdout: JSON.stringify({ links: ['a', 'b', 'c'] }), stderr: '' }),
+    });
+    expect(knownLinkCounts(PROJECT, index)[0].links).toBe(3);
+  });
+});
+
+test('a page that cannot be read stays unknown rather than counting as zero links', async () => {
+  const { fetchIndex, crawlLinks, knownLinkCounts } = await import('../src/pages');
+
+  await withStub([{ count: 1, pages: [page('a')] }], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    const report = crawlLinks(PROJECT, index, {
+      budget: 10,
+      delayMs: 0,
+      runner: () => {
+        throw new Error('HTTP 404');
+      },
+    });
+
+    expect(report.failed).toBe(1);
+    // Nothing was written, so the page is absent from the counts rather than
+    // present with zero. A zero would rank as "links to nothing", which is a
+    // claim this never established.
+    expect(knownLinkCounts(PROJECT, index)).toEqual([]);
+  });
+});

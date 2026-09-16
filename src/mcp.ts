@@ -28,7 +28,15 @@ import {
   resolvePageUrl,
   resolveProjectUrl,
 } from './defaults';
-import { getIndex, rankPages, rankableCount, type RankKey } from './pages';
+import {
+  DEFAULT_CRAWL_BUDGET,
+  crawlLinks,
+  getIndex,
+  knownLinkCounts,
+  rankPages,
+  rankableCount,
+  type RankKey,
+} from './pages';
 
 function serverVersion(): string {
   // The published tarball always contains package.json, and dist/ sits one
@@ -209,6 +217,80 @@ function logged<Args>(
       throw error;
     }
   };
+}
+
+/**
+ * Ranking by outgoing links, which needs every page body read.
+ *
+ * Reports coverage rather than pretending to a whole-project answer: a top ten
+ * drawn from a fifth of the project is a real answer about that fifth, and a
+ * misleading one about the project, so the difference is stated rather than
+ * left for the reader to assume.
+ */
+function rankByOutgoingLinks(
+  project: string,
+  index: ReturnType<typeof getIndex>['index'],
+  options: {
+    order?: 'desc' | 'asc';
+    limit?: number;
+    budget?: number;
+    refreshed: boolean;
+    ageSeconds: number;
+  },
+): string {
+  const report = crawlLinks(project, index, { budget: options.budget });
+  const counts = knownLinkCounts(project, index);
+
+  if (counts.length === 0) {
+    throw new Error(
+      `No page body of ${project} has been read yet, so outgoing links cannot ` +
+        'be ranked. This reads the project a bite at a time; call again to ' +
+        `continue (${report.failed > 0 ? `${report.failed} failed to read, ` : ''}` +
+        `${report.remaining} pages still to read).`,
+    );
+  }
+
+  const direction = (options.order ?? 'desc') === 'asc' ? 1 : -1;
+  const rows = [...counts]
+    .sort((left, right) => {
+      if (left.links === right.links) {
+        return left.entry.title.localeCompare(right.entry.title, 'ja');
+      }
+      return (left.links < right.links ? -1 : 1) * direction;
+    })
+    .slice(0, options.limit ?? 20);
+
+  const coverage = ((counts.length / index.pages.length) * 100).toFixed(1);
+  const header = [
+    `project: ${project}`,
+    `pages in project: ${index.count}`,
+    `pages in index: ${index.pages.length}`,
+    `ranked by: links ${options.order ?? 'desc'}`,
+    `bodies read: ${counts.length} of ${index.pages.length} (${coverage}%)` +
+      `${report.remaining > 0 ? `, ${report.remaining} to go` : ', complete'}`,
+    `this call read: ${report.fetched}${report.failed > 0 ? ` (${report.failed} failed)` : ''}`,
+    `index: ${options.refreshed ? 'just walked' : `${Math.round(options.ageSeconds)}s old`}`,
+    '',
+  ];
+  if (report.remaining > 0) {
+    header.splice(
+      5,
+      0,
+      'note: this ranking covers the pages read so far, not the whole project.',
+    );
+  }
+
+  const body = rows.map((row, position) => {
+    const url = `${project}/${encodeTitleForUrl(row.entry.title)}`;
+    return (
+      `${position + 1}. ${row.entry.title}\n` +
+      `   links out ${row.links} / linked in ${row.entry.linked} / ` +
+      `lines ${row.entry.linesCount}\n` +
+      `   ${url}`
+    );
+  });
+
+  return `${header.join('\n')}${body.join('\n')}`;
 }
 
 export function buildServer(): McpServer {
@@ -406,11 +488,14 @@ export function buildServer(): McpServer {
       inputSchema: {
         project_url: PROJECT_URL,
         by: z
-          .enum(['lines', 'chars', 'linked', 'views', 'updated', 'created', 'title'])
+          .enum(['lines', 'chars', 'linked', 'links', 'views', 'updated', 'created', 'title'])
           .describe(
-            'What to order by. `lines` and `chars` are page size, `linked` is ' +
+            'What to order by. `lines` and `chars` are page size. `linked` is ' +
               'how many pages link here, which is how the pages acting as ' +
-              'categories surface.',
+              'categories surface. `links` is the opposite, how many pages ' +
+              'this one points at, and is the expensive one: it lives in each ' +
+              "page's body, so the project is read a bite at a time and the " +
+              'answer says how much of it is known so far.',
           ),
         order: z
           .enum(['desc', 'asc'])
@@ -421,13 +506,35 @@ export function buildServer(): McpServer {
           .boolean()
           .optional()
           .describe('Walk the project again instead of using the local index.'),
+        budget: z
+          .number()
+          .int()
+          .min(0)
+          .max(500)
+          .optional()
+          .describe(
+            `Only for by: links. How many page bodies to read this call ` +
+              `(default ${DEFAULT_CRAWL_BUDGET}). Call again to read more; ` +
+              'nothing already known is read twice.',
+          ),
       },
       annotations: READ_ONLY_ANNOTATIONS,
     },
-    logged('cosense_rank_pages', async ({ project_url, by, order, limit, refresh }) =>
+    logged('cosense_rank_pages', async ({ project_url, by, order, limit, refresh, budget }) =>
       attemptDirect(() => {
         const project = resolveProjectUrl(project_url);
         const { index, refreshed, ageSeconds } = getIndex(project, { refresh });
+
+        if (by === 'links') {
+          return rankByOutgoingLinks(project, index, {
+            order,
+            limit,
+            budget,
+            refreshed,
+            ageSeconds,
+          });
+        }
+
         const key = by as RankKey;
         const measurable = rankableCount(index, key);
 

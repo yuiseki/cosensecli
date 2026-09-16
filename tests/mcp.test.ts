@@ -413,3 +413,89 @@ test('a ranking says how old its index is, so a stale answer is visible', async 
   expect(toolText(responses[0])).toContain('index: just walked');
   expect(toolText(responses[1])).toMatch(/index: \d+s old/);
 });
+
+test('ranking by outgoing links reads bodies, and says how much it knows', async () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 3,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 1, views: 1, linesCount: 5, charsCount: 50, pin: 0 },
+      { id: 'b', title: 'two', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 2, views: 2, linesCount: 6, charsCount: 60, pin: 0 },
+      { id: 'c', title: 'three', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 3, views: 3, linesCount: 7, charsCount: 70, pin: 0 },
+    ],
+  };
+
+  const { responses } = await runMcp(
+    ws,
+    [{ name: 'cosense_rank_pages', arguments: { by: 'links', budget: 2 } }],
+    {
+      env: { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` },
+      replies: {
+        listPages: JSON.stringify(listing),
+        readPage: JSON.stringify({ links: ['x', 'y', 'z'] }),
+      },
+    },
+  );
+
+  const text = toolText(responses[0]);
+  expect(text).toContain('bodies read: 2 of 3');
+  expect(text).toContain('1 to go');
+  // A partial ranking must say so, or a top ten from a third of the project
+  // reads as a fact about the project.
+  expect(text).toContain('note: this ranking covers the pages read so far');
+  expect(text).toContain('links out 3');
+  expect(stubCalls(ws).filter((c) => c[0] === 'readPage').length).toBe(2);
+});
+
+test('a further call continues the crawl instead of starting over', async () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 2,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+      { id: 'b', title: 'two', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+  const env = { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` };
+  const replies = {
+    listPages: JSON.stringify(listing),
+    readPage: JSON.stringify({ links: ['x'] }),
+  };
+
+  const { responses } = await runMcp(
+    ws,
+    [
+      { name: 'cosense_rank_pages', arguments: { by: 'links', budget: 1 } },
+      { name: 'cosense_rank_pages', arguments: { by: 'links', budget: 1 } },
+    ],
+    { env, replies },
+  );
+
+  expect(toolText(responses[0])).toContain('bodies read: 1 of 2');
+  expect(toolText(responses[1])).toContain('bodies read: 2 of 2');
+  expect(toolText(responses[1])).toContain('complete');
+  // Two calls, two bodies. Nothing already known was read twice.
+  expect(stubCalls(ws).filter((c) => c[0] === 'readPage').length).toBe(2);
+});
+
+test('ranking by links with nothing read yet is an error that says how to continue', async () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 1,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+
+  const { responses } = await runMcp(
+    ws,
+    [{ name: 'cosense_rank_pages', arguments: { by: 'links', budget: 0 } }],
+    {
+      env: { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` },
+      replies: { listPages: JSON.stringify(listing) },
+    },
+  );
+
+  expect(responses[0].result.isError).toBe(true);
+  expect(toolText(responses[0])).toContain('1 pages still to read');
+});

@@ -16,10 +16,14 @@
 import {
   INDEX_VERSION,
   loadIndex,
+  loadPage,
+  savePage,
   saveIndex,
+  type CachedPage,
   type IndexEntry,
   type ProjectIndex,
 } from './cache';
+import { encodeTitleForUrl } from './defaults';
 import { runCosense, type CosenseResult } from './cosense';
 
 /**
@@ -276,4 +280,140 @@ export function rankPages(
 
   const limit = options.limit ?? 20;
   return sorted.slice(0, limit);
+}
+
+/**
+ * Outgoing links, which the page list does not carry.
+ *
+ * `linked` in the index is the inverse relation: how many pages point here.
+ * How many a page points at lives in its body, so counting them means reading
+ * every page, one request each. A whole project is thousands of requests and
+ * many minutes, which is why this is budgeted rather than done in one go: a
+ * call takes a bite, records what it learned, and the next one starts from
+ * there. gyazocli fills its cache the same way, by being asked questions.
+ */
+/**
+ * Pages fetched per call when nobody says otherwise.
+ *
+ * Measured at about 0.84s each: a third of that is the request, the rest is
+ * starting a `cosense` process, since there is one per page. Twenty keeps a
+ * tool call near fifteen seconds, which a connector will wait for. Reading a
+ * whole project this way takes roughly three quarters of an hour, so that is
+ * what `cosensecli crawl` is for rather than a tool call with a large budget.
+ */
+export const DEFAULT_CRAWL_BUDGET = 20;
+
+/**
+ * A pause between requests, in milliseconds.
+ *
+ * Thousands of reads of somebody else's server deserve some spacing, the way
+ * hatebucli spaces its feed requests.
+ */
+export const DEFAULT_CRAWL_DELAY_MS = 50;
+
+/** Blocks for a while. The CLI is driven synchronously, so this has to be too. */
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  const shared = new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(shared, 0, 0, ms);
+}
+
+export type CrawlReport = {
+  /** Pages read from the network this call. */
+  fetched: number;
+  /** Pages whose cached copy was still current. */
+  current: number;
+  /** Pages still needing a read after this call. */
+  remaining: number;
+  /** Pages that failed to read, which stay remaining rather than counting. */
+  failed: number;
+};
+
+function isCurrent(cached: CachedPage | null, entry: IndexEntry): boolean {
+  // Equality on the token, not a comparison: the token is opaque, and the
+  // only question is whether the page has moved since it was cached.
+  return cached !== null && cached.updated !== '' && cached.updated === entry.updated;
+}
+
+/**
+ * Reads page bodies until the budget runs out, keeping only the links.
+ *
+ * The body itself is deliberately not kept. What a page renders as depends on
+ * other pages too, since the related-page list moves when something else links
+ * here, so a cached rendering could not be validated by this page's `updated`
+ * alone. Outgoing links can: they are a property of this page's body and
+ * nothing else.
+ */
+export function crawlLinks(
+  projectUrl: string,
+  index: ProjectIndex,
+  options: {
+    budget?: number;
+    delayMs?: number;
+    runner?: Runner;
+    onProgress?: (done: number, total: number) => void;
+  } = {},
+): CrawlReport {
+  const run = options.runner ?? runCosense;
+  const budget = options.budget ?? DEFAULT_CRAWL_BUDGET;
+  const delayMs = options.delayMs ?? DEFAULT_CRAWL_DELAY_MS;
+
+  let fetched = 0;
+  let current = 0;
+  let failed = 0;
+  const stale: IndexEntry[] = [];
+
+  for (const entry of index.pages) {
+    if (isCurrent(loadPage(projectUrl, entry.id), entry)) current += 1;
+    else stale.push(entry);
+  }
+
+  for (const entry of stale) {
+    if (fetched >= budget) break;
+    const url = `${projectUrl}/${encodeTitleForUrl(entry.title)}`;
+    try {
+      if (fetched > 0) sleepSync(delayMs);
+      const { stdout } = run('readPage', [url]);
+      const page = JSON.parse(stdout) as { links?: unknown };
+      const links = Array.isArray(page.links) ? page.links.map(String) : [];
+      savePage(projectUrl, {
+        id: entry.id,
+        title: entry.title,
+        updated: entry.updated,
+        links,
+        cachedAt: new Date().toISOString(),
+      });
+      fetched += 1;
+      options.onProgress?.(fetched, Math.min(budget, stale.length));
+    } catch {
+      // One unreadable page must not end the crawl. It stays stale, so the
+      // next call tries it again rather than recording a wrong answer.
+      failed += 1;
+      fetched += 1;
+    }
+  }
+
+  return {
+    fetched,
+    current,
+    remaining: Math.max(0, stale.length - fetched),
+    failed,
+  };
+}
+
+export type LinkCount = { entry: IndexEntry; links: number };
+
+/** Outgoing link counts for the pages whose cached body is still current. */
+export function knownLinkCounts(
+  projectUrl: string,
+  index: ProjectIndex,
+): LinkCount[] {
+  const counts: LinkCount[] = [];
+  for (const entry of index.pages) {
+    const cached = loadPage(projectUrl, entry.id);
+    if (isCurrent(cached, entry)) {
+      counts.push({ entry, links: cached!.links.length });
+    }
+  }
+  return counts;
 }
