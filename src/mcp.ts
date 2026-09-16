@@ -24,9 +24,11 @@ import { CosenseCommandError, resolveCosenseBin, runCosense } from './cosense';
 import {
   DEFAULT_PROJECT_ENV,
   defaultProjectUrl,
+  encodeTitleForUrl,
   resolvePageUrl,
   resolveProjectUrl,
 } from './defaults';
+import { getIndex, rankPages, type RankKey } from './pages';
 
 function serverVersion(): string {
   // The published tarball always contains package.json, and dist/ sits one
@@ -142,6 +144,19 @@ function attempt(build: () => { command: string; args: string[] }) {
   try {
     const { command, args } = build();
     return call(command, args);
+  } catch (error) {
+    return errorResult(error);
+  }
+}
+
+/**
+ * Like `attempt`, for a tool that produces its answer here rather than by
+ * running a command. The failure path has to be the same one, so that a bad
+ * argument reads alike whichever kind of tool it reached.
+ */
+function attemptDirect(build: () => string): ToolResult {
+  try {
+    return textResult(build());
   } catch (error) {
     return errorResult(error);
   }
@@ -374,6 +389,67 @@ export function buildServer(): McpServer {
           optional(args, '--project', project);
           return { command: 'readFileInfo', args };
         }),),
+  );
+
+  server.registerTool(
+    'cosense_rank_pages',
+    {
+      title: 'Rank the pages of a project',
+      description:
+        'Order a whole project by one measure and return the top pages: by ' +
+        'line count, character count, backlinks, views, or when they were ' +
+        'written. This answers questions the search and list tools cannot, ' +
+        'because Cosense itself will not sort by size, and asking it to is ' +
+        'not an error there but a silent fall back to update order. Reads a ' +
+        'local index of the project, refreshed when it is stale, so the first ' +
+        'call on a large project takes a few seconds and later ones do not.',
+      inputSchema: {
+        project_url: PROJECT_URL,
+        by: z
+          .enum(['lines', 'chars', 'linked', 'views', 'updated', 'created', 'title'])
+          .describe(
+            'What to order by. `lines` and `chars` are page size, `linked` is ' +
+              'how many pages link here, which is how the pages acting as ' +
+              'categories surface.',
+          ),
+        order: z
+          .enum(['desc', 'asc'])
+          .optional()
+          .describe('Default: desc, except for title, which defaults to asc.'),
+        limit: z.number().int().min(1).max(200).optional().describe('Default 20.'),
+        refresh: z
+          .boolean()
+          .optional()
+          .describe('Walk the project again instead of using the local index.'),
+      },
+      annotations: READ_ONLY_ANNOTATIONS,
+    },
+    logged('cosense_rank_pages', async ({ project_url, by, order, limit, refresh }) =>
+      attemptDirect(() => {
+        const project = resolveProjectUrl(project_url);
+        const { index, refreshed, ageSeconds } = getIndex(project, { refresh });
+        const rows = rankPages(index, by as RankKey, { order, limit });
+
+        const header = [
+          `project: ${project}`,
+          `pages in project: ${index.count}`,
+          `pages in index: ${index.pages.length}${index.truncated ? ' (partial: the walk hit its request budget)' : ''}`,
+          `index: ${refreshed ? 'just walked' : `${Math.round(ageSeconds)}s old`}`,
+          `ranked by: ${by} ${order ?? (by === 'title' ? 'asc' : 'desc')}`,
+          '',
+        ];
+        const body = rows.map((entry, position) => {
+          const url = `${project}/${encodeTitleForUrl(entry.title)}`;
+          return (
+            `${position + 1}. ${entry.title}\n` +
+            `   lines ${entry.linesCount} / chars ${entry.charsCount} / ` +
+            `linked ${entry.linked} / views ${entry.views}\n` +
+            `   ${url}`
+          );
+        });
+        return `${header.join('\n')}${body.join('\n')}`;
+      }),
+    ),
   );
 
   server.registerTool(

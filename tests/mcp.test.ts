@@ -11,6 +11,7 @@ const EXPECTED_TOOLS = [
   'cosense_list_pages',
   'cosense_list_projects',
   'cosense_page_changes',
+  'cosense_rank_pages',
   'cosense_read_file_info',
   'cosense_search',
   'cosense_search_vector',
@@ -325,4 +326,90 @@ test('a call refused before a process starts is logged too', async () => {
 
   expect(stderr).toMatch(/\[cosense-mcp\] cosense_search failed \d+ms/);
   expect(stubCalls(ws)).toEqual([]);
+});
+
+test('cosense_rank_pages orders the whole project by a measure the API refuses', async () => {
+  const ws = createTempWorkspace();
+  const pages = [
+    { id: 'a', title: 'short', updated: 1, created: 1, linked: 0, views: 0, linesCount: 4, charsCount: 40, pin: 0 },
+    { id: 'b', title: 'long', updated: 2, created: 1, linked: 0, views: 0, linesCount: 191, charsCount: 5176, pin: 0 },
+  ];
+
+  const { responses } = await runMcp(
+    ws,
+    [{ name: 'cosense_rank_pages', arguments: { by: 'lines', limit: 2 } }],
+    {
+      env: { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` },
+      replies: { listPages: JSON.stringify({ count: 2, pages }) },
+    },
+  );
+
+  const text = toolText(responses[0]);
+  expect(text).toContain('ranked by: lines desc');
+  expect(text.indexOf('long')).toBeLessThan(text.indexOf('short'));
+  expect(text).toContain('lines 191');
+  // The walk goes through the page list, not through some sort the API would
+  // have ignored.
+  expect(stubCalls(ws)[0][0]).toBe('listPages');
+});
+
+test('a second ranking call answers from the index, without walking again', async () => {
+  const ws = createTempWorkspace();
+  const pages = [
+    { id: 'a', title: 'one', updated: 1, created: 1, linked: 9, views: 3, linesCount: 4, charsCount: 40, pin: 0 },
+  ];
+  const env = { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` };
+
+  await runMcp(
+    ws,
+    [
+      { name: 'cosense_rank_pages', arguments: { by: 'lines' } },
+      { name: 'cosense_rank_pages', arguments: { by: 'linked' } },
+    ],
+    { env, replies: { listPages: JSON.stringify({ count: 1, pages }) } },
+  );
+
+  // Two rankings, one walk. This is the whole point of the cache.
+  expect(stubCalls(ws).filter((call) => call[0] === 'listPages').length).toBe(1);
+});
+
+test('refresh makes the ranking walk the project again', async () => {
+  const ws = createTempWorkspace();
+  const pages = [
+    { id: 'a', title: 'one', updated: 1, created: 1, linked: 0, views: 0, linesCount: 4, charsCount: 40, pin: 0 },
+  ];
+  const env = { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` };
+
+  await runMcp(
+    ws,
+    [
+      { name: 'cosense_rank_pages', arguments: { by: 'lines' } },
+      { name: 'cosense_rank_pages', arguments: { by: 'lines', refresh: true } },
+    ],
+    { env, replies: { listPages: JSON.stringify({ count: 1, pages }) } },
+  );
+
+  expect(stubCalls(ws).filter((call) => call[0] === 'listPages').length).toBe(2);
+});
+
+test('a ranking says how old its index is, so a stale answer is visible', async () => {
+  const ws = createTempWorkspace();
+  const pages = [
+    { id: 'a', title: 'one', updated: 1, created: 1, linked: 0, views: 0, linesCount: 4, charsCount: 40, pin: 0 },
+  ];
+
+  const { responses } = await runMcp(
+    ws,
+    [
+      { name: 'cosense_rank_pages', arguments: { by: 'lines' } },
+      { name: 'cosense_rank_pages', arguments: { by: 'lines' } },
+    ],
+    {
+      env: { ...DEFAULT_PROJECT, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` },
+      replies: { listPages: JSON.stringify({ count: 1, pages }) },
+    },
+  );
+
+  expect(toolText(responses[0])).toContain('index: just walked');
+  expect(toolText(responses[1])).toMatch(/index: \d+s old/);
 });
