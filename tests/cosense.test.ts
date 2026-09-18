@@ -392,3 +392,19 @@ test('reading the config never creates the directory', () => {
   // The MCP server runs where the home directory is read-only.
   expect(require('node:fs').existsSync(`${ws.homeDir}/.config/cosensecli`)).toBe(false);
 });
+
+test('XDG_CONFIG_HOME wins over HOME, which is what the spec says', () => {
+  const ws = createTempWorkspace();
+  const fs = require('node:fs');
+  const xdg = `${ws.rootDir}/xdg`;
+
+  runCli(ws, ['config', 'set', 'default-project', 'yuiseki'], {
+    env: { XDG_CONFIG_HOME: xdg },
+  });
+
+  // Caught by CI: the runner sets XDG_CONFIG_HOME, so a test that set only
+  // HOME wrote to the runner's own config directory and then looked for the
+  // file somewhere else.
+  expect(fs.existsSync(`${xdg}/cosensecli/projects.json`)).toBe(true);
+  expect(fs.existsSync(`${ws.homeDir}/.config/cosensecli/projects.json`)).toBe(false);
+});
