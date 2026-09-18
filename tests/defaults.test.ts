@@ -4,7 +4,10 @@
  * These are the only pieces of Cosense knowledge this package holds itself, so
  * they are tested directly rather than only through the server.
  */
-import { afterEach, expect, test } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, expect, test } from 'vitest';
 import {
   DEFAULT_PROJECT_ENV,
   defaultProjectUrl,
@@ -14,8 +17,38 @@ import {
   resolveProjectUrl,
 } from '../src/defaults';
 
+/**
+ * These call the functions in this process rather than through a spawned CLI,
+ * so the environment they read is this one. Without pinning the config
+ * directory they would read whoever is running them, and pass or fail by
+ * whether that person has set a default project.
+ */
+let configHome: string;
+let previousConfigHome: string | undefined;
+
+beforeEach(() => {
+  previousConfigHome = process.env.XDG_CONFIG_HOME;
+  configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'cosensecli-config-'));
+  process.env.XDG_CONFIG_HOME = configHome;
+});
+
 afterEach(() => {
   delete process.env[DEFAULT_PROJECT_ENV];
+  if (previousConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = previousConfigHome;
+  fs.rmSync(configHome, { recursive: true, force: true });
+});
+
+test('a stored default is read when the environment has none', async () => {
+  const { saveConfig } = await import('../src/config');
+  saveConfig({ default: 'https://scrapbox.io/stored' });
+
+  expect(defaultProjectUrl()).toBe('https://scrapbox.io/stored');
+
+  process.env[DEFAULT_PROJECT_ENV] = 'https://scrapbox.io/from-env';
+  // The environment wins, which is how one service unit points at one project
+  // without changing what the same user gets at a terminal.
+  expect(defaultProjectUrl()).toBe('https://scrapbox.io/from-env');
 });
 
 test('a project URL is normalized to origin and name', () => {

@@ -77,6 +77,13 @@ function baseEnv(workspace: Workspace, options: RunOptions): Record<string, stri
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     HOME: workspace.homeDir,
+    // Pointed at the workspace, not merely left to follow HOME.
+    // XDG_CONFIG_HOME takes precedence over HOME, so on a machine that sets it
+    // (a GitHub runner does) every test shared one config directory: a
+    // `config set` in one leaked into another, and the real user's settings
+    // were in the line of fire. Found by CI, where it is set, after passing
+    // here, where it is not.
+    XDG_CONFIG_HOME: path.join(workspace.homeDir, '.config'),
     COSENSECLI_COSENSE_BIN: workspace.stubPath,
     COSENSECLI_TEST_ARGV_LOG: workspace.argvLog,
     COSENSECLI_TEST_REPLIES: JSON.stringify(options.replies ?? {}),
