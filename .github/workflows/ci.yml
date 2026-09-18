@@ -59,6 +59,7 @@ jobs:
         run: |
           cd /tmp/smoke
           ./node_modules/.bin/cosensecli --help
+          ./node_modules/.bin/cosensecli --help | grep -q 'list-gyazo'
 
       # doctor resolves the cosense binary and runs it. Without a token the CLI
       # refuses locally, which doctor reports as an unauthenticated but working

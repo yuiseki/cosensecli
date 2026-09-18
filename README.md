@@ -194,6 +194,26 @@ About 0.67s a page, most of it process startup rather than network, so a few
 thousand pages is the better part of an hour. Nothing already current is read
 again, so running it twice costs almost nothing.
 
+## Listing the URLs in a project
+
+The crawl keeps every http(s) URL it finds in a page body, so once it has run
+the links out of a project can be listed without fetching anything.
+
+```bash
+cosensecli list-gyazo               # every Gyazo URL, one per line
+cosensecli list-urls                # every URL
+cosensecli list-urls --host github.com
+cosensecli list-gyazo --with-page   # URL and the page it is on, tab separated
+cosensecli list-gyazo --json
+```
+
+stdout is URLs alone, deduplicated and sorted, so the list pipes into whatever
+comes next. How many pages it covers goes to stderr, with a warning when the
+crawl has not finished, so half an answer is not read as the whole project.
+
+`--host` matches a hostname suffix, which is what Gyazo needs: `i.gyazo.com`
+and `nota.gyazo.com` are the same service under other names.
+
 ### What it says on stderr
 
 Every call is announced: the tool, its arguments, whether it worked and how
