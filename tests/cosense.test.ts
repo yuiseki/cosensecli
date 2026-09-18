@@ -274,3 +274,121 @@ test('list-urls --with-page keeps the page each URL came from', () => {
 
   expect(stdout).toBe('https://gyazo.com/aaa\t地図の話\n');
 });
+
+test('config set stores the default project, accepting a bare name', () => {
+  const ws = createTempWorkspace();
+  const { stdout, stderr, status } = runCli(ws, [
+    'config',
+    'set',
+    'default-project',
+    'yuiseki',
+  ]);
+
+  expect(status).toBe(0);
+  expect(stdout).toBe('default-project: https://scrapbox.io/yuiseki\n');
+  expect(stderr).toContain('projects.json');
+
+  const stored = JSON.parse(
+    require('node:fs').readFileSync(
+      `${ws.homeDir}/.config/cosensecli/projects.json`,
+      'utf8',
+    ),
+  );
+  // Normalised on the way in, so a later read cannot fail on it.
+  expect(stored.default).toBe('https://scrapbox.io/yuiseki');
+});
+
+test('config get prints the value on stdout and its origin on stderr', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['config', 'set', 'default-project', 'yuiseki']);
+
+  const { stdout, stderr, status } = runCli(ws, ['config', 'get', 'default-project']);
+
+  expect(status).toBe(0);
+  // stdout is the value alone, so it can be captured in a shell variable.
+  expect(stdout).toBe('https://scrapbox.io/yuiseki\n');
+  expect(stderr).toContain('from ');
+  expect(stderr).toContain('projects.json');
+});
+
+test('the stored default is used when no project is named', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['config', 'set', 'default-project', 'yuiseki']);
+
+  const { stdout } = runCli(ws, ['doctor'], { replies: { whoami: 'name: yuiseki' } });
+
+  expect(stdout).toContain('default project: https://scrapbox.io/yuiseki');
+  expect(stdout).toContain('from the config file');
+});
+
+test('the environment overrides the stored file, and config set says so', () => {
+  const ws = createTempWorkspace();
+
+  const { stderr } = runCli(ws, ['config', 'set', 'default-project', 'yuiseki'], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/help-jp' },
+  });
+
+  // Silence here would leave someone wondering why what they just set is not
+  // what is being used.
+  expect(stderr).toContain('overrides this file');
+  expect(stderr).toContain('https://scrapbox.io/help-jp');
+
+  const { stdout } = runCli(ws, ['config', 'get', 'default-project'], {
+    env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/help-jp' },
+  });
+  expect(stdout).toBe('https://scrapbox.io/help-jp\n');
+});
+
+test('config set refuses a page URL, before it reaches the file', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, [
+    'config',
+    'set',
+    'default-project',
+    'https://scrapbox.io/yuiseki/地図',
+  ]);
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('not a page URL');
+  expect(require('node:fs').existsSync(`${ws.homeDir}/.config/cosensecli/projects.json`)).toBe(
+    false,
+  );
+});
+
+test('config get with nothing set explains how to set it', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['config', 'get', 'default-project']);
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('config set default-project');
+});
+
+test('an unknown setting is refused by name', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['config', 'set', 'token', 'secret']);
+
+  expect(status).toBe(2);
+  expect(stderr).toContain('unknown setting: token');
+});
+
+test('a config file that is there but unreadable is an error, not an empty default', () => {
+  const ws = createTempWorkspace();
+  const fs = require('node:fs');
+  fs.mkdirSync(`${ws.homeDir}/.config/cosensecli`, { recursive: true });
+  fs.writeFileSync(`${ws.homeDir}/.config/cosensecli/projects.json`, '{ broken');
+
+  const { status, stderr } = runCli(ws, ['config', 'get', 'default-project']);
+
+  // Reporting "no default configured" would send someone looking at the wrong
+  // thing entirely.
+  expect(status).toBe(1);
+  expect(stderr).toContain('not valid JSON');
+});
+
+test('reading the config never creates the directory', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['config', 'get', 'default-project']);
+
+  // The MCP server runs where the home directory is read-only.
+  expect(require('node:fs').existsSync(`${ws.homeDir}/.config/cosensecli`)).toBe(false);
+});

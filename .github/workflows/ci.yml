@@ -60,6 +60,17 @@ jobs:
           cd /tmp/smoke
           ./node_modules/.bin/cosensecli --help
           ./node_modules/.bin/cosensecli --help | grep -q 'list-gyazo'
+          ./node_modules/.bin/cosensecli --help | grep -q 'config set default-project'
+
+      # The stored default is read by everything else, so a packed build that
+      # cannot write or read it would fail only once someone relied on it.
+      - name: The default project round-trips through the config file
+        run: |
+          cd /tmp/smoke
+          HOME=/tmp/smoke-home ./node_modules/.bin/cosensecli config set default-project ci-project
+          HOME=/tmp/smoke-home ./node_modules/.bin/cosensecli config get default-project | tee got.txt
+          grep -q 'https://scrapbox.io/ci-project' got.txt
+          test -f /tmp/smoke-home/.config/cosensecli/projects.json
 
       # doctor resolves the cosense binary and runs it. Without a token the CLI
       # refuses locally, which doctor reports as an unauthenticated but working

@@ -8,7 +8,14 @@
  * enough around it to see whether the server will work.
  */
 import { READ_ONLY_COMMANDS, resolveCosenseBin, runCosense } from './cosense';
-import { DEFAULT_PROJECT_ENV, defaultProjectUrl, resolveProjectUrl } from './defaults';
+import {
+  DEFAULT_PROJECT_ENV,
+  defaultProjectSource,
+  defaultProjectUrl,
+  normalizeProjectUrl,
+  resolveProjectUrl,
+} from './defaults';
+import { configPath, loadConfig, saveConfig } from './config';
 import { bodyCoverage, collectUrls, crawlLinks, getIndex } from './pages';
 
 function cliVersion(): string {
@@ -19,6 +26,10 @@ const HELP = `cosensecli v${cliVersion()} - a read-only MCP server for Cosense
 
 Usage:
   cosensecli --mcp-server    run the Model Context Protocol server over stdio
+  cosensecli config set default-project <name|url>
+  cosensecli config get default-project
+                             the project a command or tool is about when it
+                             names none
   cosensecli doctor          check that the cosense CLI underneath is usable
   cosensecli crawl [<projectUrl>] [--budget <n>]
                              read page bodies into the cache, for ranking by
@@ -44,6 +55,13 @@ Set a default project and a question no longer has to name one, which is the
 point over MCP: "what did I write about X" rather than "in project Y, what did
 I write about X". Every tool still takes a project URL, and a given one wins.
 
+  cosensecli config set default-project yuiseki
+
+A bare name means scrapbox.io; a URL is taken as given, so another host works
+too. The value is stored in ~/.config/cosensecli/projects.json.
+COSENSECLI_DEFAULT_PROJECT overrides it, which is how a service unit points at
+one project without changing what the same user gets at a terminal.
+
 \`crawl\` is the bulk form of what the ranking tool does a bite at a time. A page
 body is one request and one process, about 0.84s, so a few thousand pages is
 the better part of an hour: worth a cron entry, not a tool call. Nothing
@@ -62,14 +80,102 @@ Environment:
                               bundled @helpfeel/cosense-cli
 `;
 
+/** Reads and writes the stored settings. */
+function config(args: string[]): number {
+  const [action, key, ...rest] = args;
+
+  if (action !== 'set' && action !== 'get') {
+    process.stderr.write(
+      'Usage: cosensecli config set default-project <name|url>\n' +
+        '       cosensecli config get default-project\n',
+    );
+    return 2;
+  }
+  if (key !== 'default-project') {
+    process.stderr.write(
+      `unknown setting: ${key ?? '(none)'}. The only one is default-project.\n`,
+    );
+    return 2;
+  }
+
+  if (action === 'get') {
+    let value: string | undefined;
+    try {
+      value = defaultProjectUrl();
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      return 1;
+    }
+    if (value === undefined) {
+      process.stderr.write(
+        'No default project. Set one with `cosensecli config set ' +
+          'default-project <name>`.\n',
+      );
+      return 1;
+    }
+    process.stdout.write(`${value}\n`);
+    // Where it came from goes to stderr, so `$(cosensecli config get ...)`
+    // captures the value alone.
+    const source = defaultProjectSource();
+    if (source === 'environment') {
+      process.stderr.write(
+        `from ${DEFAULT_PROJECT_ENV}, which overrides ${configPath()}\n`,
+      );
+    } else {
+      process.stderr.write(`from ${configPath()}\n`);
+    }
+    return 0;
+  }
+
+  const given = rest[0];
+  if (given === undefined) {
+    process.stderr.write('Usage: cosensecli config set default-project <name|url>\n');
+    return 2;
+  }
+
+  let normalized: string;
+  try {
+    // Normalised before it is written, so a mistake is an error here rather
+    // than on every later call that reads the file.
+    normalized = normalizeProjectUrl(given, 'default-project');
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  let stored;
+  try {
+    stored = loadConfig();
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const file = saveConfig({ ...stored, default: normalized });
+  process.stdout.write(`default-project: ${normalized}\n`);
+  process.stderr.write(`written to ${file}\n`);
+
+  if (defaultProjectSource() === 'environment') {
+    // Saying nothing here would leave someone wondering why the thing they
+    // just set is not the thing being used.
+    process.stderr.write(
+      `note: ${DEFAULT_PROJECT_ENV} is set and overrides this file, so ` +
+        `commands in this environment still use ${defaultProjectUrl()}.\n`,
+    );
+  }
+  return 0;
+}
+
 /** Prints whether the underlying CLI is present and answering. */
 function doctor(): number {
   const bin = resolveCosenseBin();
   process.stdout.write(`cosense binary: ${bin}\n`);
   try {
     const project = defaultProjectUrl();
+    const source = defaultProjectSource();
     process.stdout.write(
-      `default project: ${project ?? `none (set ${DEFAULT_PROJECT_ENV})`}\n`,
+      `default project: ${project ?? 'none (run `cosensecli config set default-project <name>`)'}` +
+        `${project ? ` (from the ${source === 'environment' ? 'environment' : 'config file'})` : ''}\n`,
     );
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
@@ -244,6 +350,8 @@ if (command !== undefined && MCP_INVOCATIONS.has(command)) {
   process.stdout.write(`cosensecli v${cliVersion()}\n`);
 } else if (command === undefined || command === '--help' || command === '-h') {
   process.stdout.write(HELP);
+} else if (command === 'config') {
+  process.exit(config(process.argv.slice(3)));
 } else if (command === 'doctor') {
   process.exit(doctor());
 } else if (command === 'crawl') {

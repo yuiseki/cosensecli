@@ -39,13 +39,32 @@ right for a command line. Over MCP it is not, because naming the project in
 every sentence is the plumbing an assistant was meant to absorb.
 
 ```bash
-export COSENSECLI_DEFAULT_PROJECT=https://scrapbox.io/yuiseki
+cosensecli config set default-project yuiseki
 ```
 
 With that set, "what did I write about maps" is answerable as asked. Every tool
 still takes `project_url`, and a given one wins, so other projects stay
 reachable through the same connector. The page tools also take a bare `title`
 once there is a default, since search answers in titles.
+
+A bare name means scrapbox.io. A URL is taken as given, so another instance
+works too, and a page URL is refused rather than stored, since defaulting to a
+page would answer every question about that one page. The value is normalised
+before it is written, so a mistake is an error at the moment you make it.
+
+```bash
+cosensecli config get default-project    # the value on stdout, its origin on stderr
+```
+
+| | |
+| --- | --- |
+| `~/.config/cosensecli/projects.json` | where it is stored, 0600 |
+| `COSENSECLI_DEFAULT_PROJECT` | overrides the file |
+
+The environment winning is what lets one service unit point at one project
+without changing what the same user gets at a terminal. `config set` says so
+when the variable is set, rather than leaving you to wonder why what you just
+set is not what is being used.
 
 See [ADR 005](docs/ADR/005-a-default-project.md).
 
@@ -249,7 +268,8 @@ README says. Run the write commands yourself with `cosense`. See
 | Cache | `${COSENSECLI_CACHE_DIR:-~/.cache/cosensecli}/projects/<host>/<project>/` |
 | Credentials | `~/.cosense/settings.json`, written by `cosense login`. Read here, never written |
 | `COSENSE_PAT` | a personal access token, and it wins over the stored ones |
-| `COSENSECLI_DEFAULT_PROJECT` | the project a call is about when it names none |
+| Settings | `${XDG_CONFIG_HOME:-~/.config}/cosensecli/projects.json` |
+| `COSENSECLI_DEFAULT_PROJECT` | the project a call is about when it names none, and it wins over the file |
 | `COSENSECLI_CACHE_DIR` | where the index and the link data are kept |
 | `COSENSECLI_COSENSE_BIN` | the `cosense` executable to run, instead of the bundled one |
 

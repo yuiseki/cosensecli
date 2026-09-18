@@ -11,22 +11,45 @@
  * a given one wins. Other projects stay reachable through the same connector.
  */
 
+import { loadConfig } from './config';
+
 export const DEFAULT_PROJECT_ENV = 'COSENSECLI_DEFAULT_PROJECT';
 
+/** The Cosense instance a bare project name belongs to. */
+export const DEFAULT_ORIGIN = 'https://scrapbox.io';
+
 /**
- * Turns a project URL into its canonical `origin/name` form.
+ * Turns a project reference into its canonical `origin/name` form.
  *
- * Accepts what a person would paste: with or without a trailing slash, and
- * with or without the scheme, because `scrapbox.io/yuiseki` is what the
- * address bar shows. Anything carrying a deeper path is a page URL and is
- * refused, since defaulting to a page would silently answer about one page.
+ * Accepts what a person would type or paste, in this order:
+ *
+ * - `yuiseki`, a bare project name, which means scrapbox.io. This is the form
+ *   worth typing, and the one `config set default-project` is usually given.
+ * - `scrapbox.io/yuiseki`, which is what the address bar shows.
+ * - `https://scrapbox.io/yuiseki`, with or without a trailing slash.
+ *
+ * A bare name is told from a bare host by looking for a dot or a slash: a
+ * Cosense project name has neither, and a hostname always has a dot. So
+ * `scrapbox.io` on its own stays an error about a missing project rather than
+ * becoming a project called "scrapbox.io" on some other host.
+ *
+ * Anything carrying a deeper path is a page URL and is refused, since
+ * defaulting to a page would silently answer every question about one page.
  */
 export function normalizeProjectUrl(input: string, source: string): string {
   const trimmed = input.trim();
   if (trimmed === '') {
-    throw new Error(`${source} is empty. Set it to a project URL, e.g. https://scrapbox.io/yuiseki`);
+    throw new Error(
+      `${source} is empty. Give a project name (yuiseki) or a URL ` +
+        '(https://scrapbox.io/yuiseki).',
+    );
   }
-  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const bare = !trimmed.includes('/') && !trimmed.includes('.');
+  const withScheme = bare
+    ? `${DEFAULT_ORIGIN}/${trimmed}`
+    : /^https?:\/\//i.test(trimmed)
+      ? trimmed
+      : `https://${trimmed}`;
 
   let url: URL;
   try {
@@ -52,11 +75,33 @@ export function normalizeProjectUrl(input: string, source: string): string {
   return `${url.origin}/${segments[0]}`;
 }
 
-/** The configured default project, or undefined when there is none. */
+/**
+ * The configured default project, or undefined when there is none.
+ *
+ * The environment wins over the stored file, the way HATENA_USER wins in
+ * hatebucli and COSENSE_PAT wins in the CLI underneath. That is what lets one
+ * service unit point at one project without disturbing what the same user gets
+ * at a terminal.
+ */
 export function defaultProjectUrl(): string | undefined {
   const raw = process.env[DEFAULT_PROJECT_ENV];
-  if (raw === undefined || raw.trim() === '') return undefined;
-  return normalizeProjectUrl(raw, DEFAULT_PROJECT_ENV);
+  if (raw !== undefined && raw.trim() !== '') {
+    return normalizeProjectUrl(raw, DEFAULT_PROJECT_ENV);
+  }
+  const stored = loadConfig().default;
+  if (typeof stored === 'string' && stored.trim() !== '') {
+    return normalizeProjectUrl(stored, 'the stored default project');
+  }
+  return undefined;
+}
+
+/** Where the default came from, for the commands that report it. */
+export function defaultProjectSource(): 'environment' | 'config' | 'none' {
+  const raw = process.env[DEFAULT_PROJECT_ENV];
+  if (raw !== undefined && raw.trim() !== '') return 'environment';
+  const stored = loadConfig().default;
+  if (typeof stored === 'string' && stored.trim() !== '') return 'config';
+  return 'none';
 }
 
 /**
@@ -73,8 +118,8 @@ export function resolveProjectUrl(given?: string): string {
   if (fallback === undefined) {
     throw new Error(
       'No project was given and no default is configured. Pass project_url, ' +
-        `or set ${DEFAULT_PROJECT_ENV} to a project URL such as ` +
-        'https://scrapbox.io/yuiseki.',
+        'run `cosensecli config set default-project <name>`, or set ' +
+        `${DEFAULT_PROJECT_ENV}.`,
     );
   }
   return fallback;

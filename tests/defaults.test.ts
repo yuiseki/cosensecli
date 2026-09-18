@@ -100,3 +100,15 @@ test('giving both a URL and a title is refused rather than guessed', () => {
 test('a title with no default project says so', () => {
   expect(() => resolvePageUrl({ title: '地図' })).toThrow(new RegExp(DEFAULT_PROJECT_ENV));
 });
+
+test('a bare project name means scrapbox.io, which is the form worth typing', () => {
+  expect(normalizeProjectUrl('yuiseki', 'x')).toBe('https://scrapbox.io/yuiseki');
+  expect(normalizeProjectUrl('help-jp', 'x')).toBe('https://scrapbox.io/help-jp');
+});
+
+test('a bare hostname is still a missing project, not a project name', () => {
+  // The dot is what tells them apart. Without this, `scrapbox.io` would
+  // quietly become a project called "scrapbox.io" on some other host.
+  expect(() => normalizeProjectUrl('scrapbox.io', 'x')).toThrow(/must name a project/);
+  expect(() => normalizeProjectUrl('cosense.example.com', 'x')).toThrow(/must name a project/);
+});
