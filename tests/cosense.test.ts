@@ -93,10 +93,10 @@ test('doctor fails when the CLI cannot run at all', () => {
 
 test('an unknown cosensecli command exits 2', () => {
   const ws = createTempWorkspace();
-  const { status, stderr } = runCli(ws, ['sync']);
+  const { status, stderr } = runCli(ws, ['fetch']);
 
   expect(status).toBe(2);
-  expect(stderr).toContain('unknown command: sync');
+  expect(stderr).toContain('unknown command: fetch');
 });
 
 test('doctor treats a locally missing token as unauthenticated, not broken', () => {
@@ -150,9 +150,9 @@ test('a fresh process per call is what lets credentials appear without a restart
   ]);
 });
 
-test('crawl refuses a budget that is not a positive number', () => {
+test('sync refuses a budget that is not a positive number', () => {
   const ws = createTempWorkspace();
-  const { status, stderr } = runCli(ws, ['crawl', '--budget', 'lots'], {
+  const { status, stderr } = runCli(ws, ['sync', '--budget', 'lots'], {
     env: { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki' },
   });
 
@@ -160,15 +160,15 @@ test('crawl refuses a budget that is not a positive number', () => {
   expect(stderr).toContain('--budget needs a positive number');
 });
 
-test('crawl says which project it is about, and needs one', () => {
+test('sync says which project it is about, and needs one', () => {
   const ws = createTempWorkspace();
-  const { status, stderr } = runCli(ws, ['crawl']);
+  const { status, stderr } = runCli(ws, ['sync']);
 
   expect(status).toBe(1);
   expect(stderr).toContain('COSENSECLI_DEFAULT_PROJECT');
 });
 
-test('crawl reads bodies and reports what it did', () => {
+test('sync reads bodies and reports what it did', () => {
   const ws = createTempWorkspace();
   const listing = {
     count: 2,
@@ -178,7 +178,7 @@ test('crawl reads bodies and reports what it did', () => {
     ],
   };
 
-  const { stdout, status } = runCli(ws, ['crawl', '--budget', '1'], {
+  const { stdout, status } = runCli(ws, ['sync', '--budget', '1'], {
     env: {
       COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
       COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
@@ -216,7 +216,7 @@ test('list-gyazo prints one URL per line and puts coverage on stderr', () => {
     }),
   };
 
-  runCli(ws, ['crawl'], { env, replies });
+  runCli(ws, ['sync'], { env, replies });
   const { stdout, stderr, status } = runCli(ws, ['list-gyazo'], { env, replies });
 
   expect(status).toBe(0);
@@ -244,7 +244,7 @@ test('list-gyazo warns when the crawl is incomplete', () => {
     readPage: JSON.stringify({ links: [], lines: [{ text: 'https://gyazo.com/aaa' }] }),
   };
 
-  runCli(ws, ['crawl', '--budget', '1'], { env, replies });
+  runCli(ws, ['sync', '--budget', '1'], { env, replies });
   const { stderr } = runCli(ws, ['list-gyazo'], { env, replies });
 
   // Half the project read, so the list is half an answer and says so.
@@ -269,7 +269,7 @@ test('list-urls --with-page keeps the page each URL came from', () => {
     readPage: JSON.stringify({ links: [], lines: [{ text: 'https://gyazo.com/aaa' }] }),
   };
 
-  runCli(ws, ['crawl'], { env, replies });
+  runCli(ws, ['sync'], { env, replies });
   const { stdout } = runCli(ws, ['list-urls', '--with-page'], { env, replies });
 
   expect(stdout).toBe('https://gyazo.com/aaa\t地図の話\n');
@@ -407,4 +407,31 @@ test('XDG_CONFIG_HOME wins over HOME, which is what the spec says', () => {
   // file somewhere else.
   expect(fs.existsSync(`${xdg}/cosensecli/projects.json`)).toBe(true);
   expect(fs.existsSync(`${ws.homeDir}/.config/cosensecli/projects.json`)).toBe(false);
+});
+
+test('crawl is an alias of sync, and says nothing about being one', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 1,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+
+  const { stdout, stderr, status } = runCli(ws, ['crawl'], {
+    env: {
+      COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
+      COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
+    },
+    replies: {
+      listPages: JSON.stringify(listing),
+      readPage: JSON.stringify({ links: [], lines: [] }),
+    },
+  });
+
+  expect(status).toBe(0);
+  expect(stdout).toContain('read 1 in');
+  // An alias, not a deprecation: nagging on every cron run would be noise for
+  // a name that is not going anywhere.
+  expect(stderr).not.toContain('sync');
 });

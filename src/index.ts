@@ -31,7 +31,7 @@ Usage:
                              the project a command or tool is about when it
                              names none
   cosensecli doctor          check that the cosense CLI underneath is usable
-  cosensecli crawl [<projectUrl>] [--budget <n>]
+  cosensecli sync [<projectUrl>] [--budget <n>]     (alias: crawl)
                              read page bodies into the cache, for ranking by
                              outgoing links and for listing URLs
   cosensecli list-urls [<projectUrl>] [--host <suffix>] [--with-page] [--json]
@@ -62,14 +62,14 @@ too. The value is stored in ~/.config/cosensecli/projects.json.
 COSENSECLI_DEFAULT_PROJECT overrides it, which is how a service unit points at
 one project without changing what the same user gets at a terminal.
 
-\`crawl\` is the bulk form of what the ranking tool does a bite at a time. A page
+\`sync\` is the bulk form of what the ranking tool does a bite at a time. A page
 body is one request and one process, about 0.84s, so a few thousand pages is
 the better part of an hour: worth a cron entry, not a tool call. Nothing
 already current is read again, so running it twice costs almost nothing.
 
 \`list-urls\` and \`list-gyazo\` read the cache and never fetch. They cover the
-pages crawled so far and say on stderr how many that is, so a partial answer is
-not mistaken for the whole project. Run \`crawl\` first for all of it.
+pages read so far and say on stderr how many that is, so a partial answer is
+not mistaken for the whole project. Run \`sync\` first for all of it.
 
 Environment:
   COSENSECLI_DEFAULT_PROJECT  the project a call is about when it names none,
@@ -204,7 +204,7 @@ function doctor(): number {
 }
 
 /** Reads page bodies into the cache, reporting as it goes. */
-function crawl(args: string[]): number {
+function sync(args: string[]): number {
   let budget = Number.POSITIVE_INFINITY;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i += 1) {
@@ -310,7 +310,7 @@ function listUrls(args: string[], fixedHost?: string): number {
   if (coverage.known < coverage.total) {
     process.stderr.write(
       `warning: ${coverage.known} of ${coverage.total} page bodies have been ` +
-        `read, so this is not the whole project. Run \`cosensecli crawl\` first.\n`,
+        `read, so this is not the whole project. Run \`cosensecli sync\` first.\n`,
     );
   }
 
@@ -354,8 +354,14 @@ if (command !== undefined && MCP_INVOCATIONS.has(command)) {
   process.exit(config(process.argv.slice(3)));
 } else if (command === 'doctor') {
   process.exit(doctor());
+} else if (command === 'sync') {
+  process.exit(sync(process.argv.slice(3)));
 } else if (command === 'crawl') {
-  process.exit(crawl(process.argv.slice(3)));
+  // An alias, not a deprecation. `sync` is the name the sibling CLIs use, and
+  // `crawl` says more plainly what it does to somebody meeting it for the
+  // first time; there is no reason for one of them to nag about the other,
+  // least of all on every cron run.
+  process.exit(sync(process.argv.slice(3)));
 } else if (command === 'list-urls') {
   process.exit(listUrls(process.argv.slice(3)));
 } else if (command === 'list-gyazo') {

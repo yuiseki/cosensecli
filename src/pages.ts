@@ -299,7 +299,7 @@ export function rankPages(
  * starting a `cosense` process, since there is one per page. Twenty keeps a
  * tool call near fifteen seconds, which a connector will wait for. Reading a
  * whole project this way takes roughly three quarters of an hour, so that is
- * what `cosensecli crawl` is for rather than a tool call with a large budget.
+ * what `cosensecli sync` is for rather than a tool call with a large budget.
  */
 export const DEFAULT_CRAWL_BUDGET = 20;
 

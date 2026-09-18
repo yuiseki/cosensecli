@@ -205,9 +205,13 @@ Calling again continues from there. For the whole project, run the bulk form
 without a connector waiting on it, from a terminal or a cron entry:
 
 ```bash
-cosensecli crawl                  # the default project
-cosensecli crawl --budget 500     # stop after 500 pages
+cosensecli sync                  # the default project
+cosensecli sync --budget 500     # stop after 500 pages
 ```
+
+`crawl` is an alias, which is the name it had first and the one that says more
+plainly what it does; `sync` is what the sibling CLIs in this family call the
+same thing.
 
 About 0.67s a page, most of it process startup rather than network, so a few
 thousand pages is the better part of an hour. Nothing already current is read
@@ -215,8 +219,8 @@ again, so running it twice costs almost nothing.
 
 ## Listing the URLs in a project
 
-The crawl keeps every http(s) URL it finds in a page body, so once it has run
-the links out of a project can be listed without fetching anything.
+`sync` keeps every http(s) URL it finds in a page body, so once it has run the
+links out of a project can be listed without fetching anything.
 
 ```bash
 cosensecli list-gyazo               # every Gyazo URL, one per line
@@ -228,7 +232,7 @@ cosensecli list-gyazo --json
 
 stdout is URLs alone, deduplicated and sorted, so the list pipes into whatever
 comes next. How many pages it covers goes to stderr, with a warning when the
-crawl has not finished, so half an answer is not read as the whole project.
+sync has not finished, so half an answer is not read as the whole project.
 
 `--host` matches a hostname suffix, which is what Gyazo needs: `i.gyazo.com`
 and `nota.gyazo.com` are the same service under other names.

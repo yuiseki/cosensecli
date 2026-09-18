@@ -63,7 +63,7 @@ rather than reinterpreted.
   project a ranking covers, and whether the walk was cut short. A partial
   ranking that did not say so would read as a fact about the whole project.
 - Reading every body is about 35 minutes for 3206 pages, most of it process
-  startup rather than network. That is a cron job (`cosensecli crawl`), not a
+  startup rather than network. That is a cron job (`cosensecli sync`), not a
   tool call, so tool calls take a bounded bite and converge.
 - The ETag the API actually sends is not reachable from here, because the CLI
   does not surface response headers. `updated` is the available equivalent and

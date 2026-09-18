@@ -61,6 +61,7 @@ jobs:
           ./node_modules/.bin/cosensecli --help
           ./node_modules/.bin/cosensecli --help | grep -q 'list-gyazo'
           ./node_modules/.bin/cosensecli --help | grep -q 'config set default-project'
+          ./node_modules/.bin/cosensecli --help | grep -q 'cosensecli sync'
 
       # The stored default is read by everything else, so a packed build that
       # cannot write or read it would fail only once someone relied on it.
