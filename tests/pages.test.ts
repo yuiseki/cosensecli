@@ -339,7 +339,7 @@ test('an index written by an older build is discarded, not reinterpreted', async
   expect(loadIndex(PROJECT)).toBeNull();
 });
 
-test('a crawl reads page bodies up to its budget and keeps only the links', async () => {
+test('a crawl reads page bodies up to its budget, keeping links and URLs but no text', async () => {
   const { fetchIndex, crawlLinks, knownLinkCounts } = await import('../src/pages');
   const { loadPage } = await import('../src/cache');
   const listing = {
@@ -359,10 +359,21 @@ test('a crawl reads page bodies up to its budget and keeps only the links', asyn
     expect(report.remaining).toBe(1);
     expect(report.current).toBe(0);
 
-    // The body is not kept: only what this page's own `updated` can validate.
+    // The body text is not kept: what is extracted from it is. Holding the
+    // rendering would be the thing this page's own `updated` could not vouch
+    // for, since the related list moves when other pages change.
     const cached = loadPage(PROJECT, 'a')!;
     expect(cached.links).toEqual(['x', 'y']);
-    expect(Object.keys(cached).sort()).toEqual(['cachedAt', 'id', 'links', 'title', 'updated']);
+    expect(Object.keys(cached).sort()).toEqual([
+      'cachedAt',
+      'id',
+      'links',
+      'title',
+      'updated',
+      'urls',
+    ]);
+    expect(cached).not.toHaveProperty('lines');
+    expect(cached).not.toHaveProperty('text');
 
     expect(knownLinkCounts(PROJECT, index).length).toBe(2);
   });
@@ -433,5 +444,83 @@ test('a page that cannot be read stays unknown rather than counting as zero link
     // present with zero. A zero would rank as "links to nothing", which is a
     // claim this never established.
     expect(knownLinkCounts(PROJECT, index)).toEqual([]);
+  });
+});
+
+test('URLs are pulled out of the body, whatever notation wraps them', async () => {
+  const { extractUrls } = await import('../src/pages');
+
+  const urls = extractUrls([
+    { text: 'bare https://gyazo.com/aaa here' },
+    { text: '[https://gyazo.com/bbb]' },
+    { text: '[https://example.com/c ラベル付き]' },
+    { text: 'https://gyazo.com/aaa' }, // the same one again
+    { text: 'no url at all' },
+    { text: undefined },
+  ]);
+
+  expect(urls).toEqual([
+    'https://gyazo.com/aaa',
+    'https://gyazo.com/bbb',
+    'https://example.com/c',
+  ]);
+});
+
+test('a host filter matches subdomains, which are the same service renamed', async () => {
+  const { fetchIndex, crawlLinks, collectUrls } = await import('../src/pages');
+
+  await withStub([{ count: 1, pages: [page('a', { title: 'one' })] }], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    crawlLinks(PROJECT, index, {
+      budget: 1,
+      delayMs: 0,
+      runner: () => ({
+        stdout: JSON.stringify({
+          links: [],
+          lines: [
+            { text: 'https://gyazo.com/aaa' },
+            { text: 'https://i.gyazo.com/bbb.png' },
+            { text: 'https://nota.gyazo.com/ccc/raw' },
+            { text: 'https://notgyazo.com/ddd' },
+            { text: 'https://example.com/e' },
+          ],
+        }),
+        stderr: '',
+      }),
+    });
+
+    const gyazo = collectUrls(PROJECT, index, { host: 'gyazo.com' }).map((r) => r.url);
+    // i. and nota. are Gyazo; notgyazo.com only looks like it, and an exact
+    // hostname comparison would have missed the first two.
+    expect(gyazo).toEqual([
+      'https://gyazo.com/aaa',
+      'https://i.gyazo.com/bbb.png',
+      'https://nota.gyazo.com/ccc/raw',
+    ]);
+    expect(collectUrls(PROJECT, index).length).toBe(5);
+  });
+});
+
+test('a page cached before urls existed is read again, not reported as having none', async () => {
+  const { fetchIndex, collectUrls, bodyCoverage } = await import('../src/pages');
+  const { savePage } = await import('../src/cache');
+
+  await withStub([{ count: 1, pages: [page('a', { title: 'one' })] }], (runner) => {
+    const index = fetchIndex(PROJECT, { runner });
+    const entry = index.pages[0];
+
+    // What an older build wrote: the token matches, but nothing ever looked
+    // for URLs. Trusting it would answer "no Gyazo images" from a record that
+    // could not have known.
+    savePage(PROJECT, {
+      id: entry.id,
+      title: entry.title,
+      updated: entry.updated,
+      links: [],
+      cachedAt: new Date().toISOString(),
+    } as any);
+
+    expect(bodyCoverage(PROJECT, index)).toEqual({ known: 0, total: 1 });
+    expect(collectUrls(PROJECT, index)).toEqual([]);
   });
 });

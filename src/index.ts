@@ -9,7 +9,7 @@
  */
 import { READ_ONLY_COMMANDS, resolveCosenseBin, runCosense } from './cosense';
 import { DEFAULT_PROJECT_ENV, defaultProjectUrl, resolveProjectUrl } from './defaults';
-import { crawlLinks, getIndex } from './pages';
+import { bodyCoverage, collectUrls, crawlLinks, getIndex } from './pages';
 
 function cliVersion(): string {
   return require('../package.json').version as string;
@@ -22,7 +22,11 @@ Usage:
   cosensecli doctor          check that the cosense CLI underneath is usable
   cosensecli crawl [<projectUrl>] [--budget <n>]
                              read page bodies into the cache, for ranking by
-                             outgoing links
+                             outgoing links and for listing URLs
+  cosensecli list-urls [<projectUrl>] [--host <suffix>] [--with-page] [--json]
+                             every URL found in the page bodies read so far
+  cosensecli list-gyazo [<projectUrl>] [--with-page] [--json]
+                             the same, narrowed to Gyazo
   cosensecli --version
   cosensecli --help
 
@@ -44,6 +48,10 @@ I write about X". Every tool still takes a project URL, and a given one wins.
 body is one request and one process, about 0.84s, so a few thousand pages is
 the better part of an hour: worth a cron entry, not a tool call. Nothing
 already current is read again, so running it twice costs almost nothing.
+
+\`list-urls\` and \`list-gyazo\` read the cache and never fetch. They cover the
+pages crawled so far and say on stderr how many that is, so a partial answer is
+not mistaken for the whole project. Run \`crawl\` first for all of it.
 
 Environment:
   COSENSECLI_DEFAULT_PROJECT  the project a call is about when it names none,
@@ -143,6 +151,83 @@ function crawl(args: string[]): number {
   return 0;
 }
 
+/** The hostname suffix `list-gyazo` narrows to. */
+const GYAZO_HOST = 'gyazo.com';
+
+/**
+ * Prints the URLs held in the cache.
+ *
+ * One per line by default, deduplicated and sorted, because the useful thing
+ * to do with this list is feed it to something else. Coverage goes to stderr
+ * rather than stdout so that a pipe gets only URLs.
+ */
+function listUrls(args: string[], fixedHost?: string): number {
+  let host = fixedHost;
+  let withPage = false;
+  let asJson = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] as string;
+    if (arg === '--host' && fixedHost === undefined) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        process.stderr.write('--host needs a hostname suffix, e.g. gyazo.com\n');
+        return 2;
+      }
+      host = value;
+      i += 1;
+    } else if (arg === '--with-page') {
+      withPage = true;
+    } else if (arg === '--json') {
+      asJson = true;
+    } else if (arg.startsWith('--')) {
+      process.stderr.write(`unknown option: ${arg}\n`);
+      return 2;
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  let project: string;
+  try {
+    project = resolveProjectUrl(positional[0]);
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+
+  const { index } = getIndex(project);
+  const coverage = bodyCoverage(project, index);
+  const rows = collectUrls(project, index, { host });
+
+  if (coverage.known < coverage.total) {
+    process.stderr.write(
+      `warning: ${coverage.known} of ${coverage.total} page bodies have been ` +
+        `read, so this is not the whole project. Run \`cosensecli crawl\` first.\n`,
+    );
+  }
+
+  if (asJson) {
+    process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+  } else if (withPage) {
+    for (const row of rows) {
+      process.stdout.write(`${row.url}\t${row.title}\n`);
+    }
+  } else {
+    // Deduplicated only in this form: the same image used on two pages is one
+    // URL, and a caller asking for a plain list wants it once.
+    const unique = [...new Set(rows.map((row) => row.url))].sort();
+    for (const url of unique) process.stdout.write(`${url}\n`);
+  }
+
+  process.stderr.write(
+    `${rows.length} found on ${coverage.known} pages` +
+      `${host ? ` (host ${host})` : ''}\n`,
+  );
+  return 0;
+}
+
 const [, , command] = process.argv;
 
 const MCP_INVOCATIONS = new Set(['--mcp-server', '--mcp', 'mcp-server', 'mcp']);
@@ -163,6 +248,10 @@ if (command !== undefined && MCP_INVOCATIONS.has(command)) {
   process.exit(doctor());
 } else if (command === 'crawl') {
   process.exit(crawl(process.argv.slice(3)));
+} else if (command === 'list-urls') {
+  process.exit(listUrls(process.argv.slice(3)));
+} else if (command === 'list-gyazo') {
+  process.exit(listUrls(process.argv.slice(3), GYAZO_HOST));
 } else {
   process.stderr.write(`unknown command: ${command}\nSee \`cosensecli --help\`.\n`);
   process.exit(2);

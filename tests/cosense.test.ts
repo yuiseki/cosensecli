@@ -194,3 +194,83 @@ test('crawl reads bodies and reports what it did', () => {
   expect(stdout).toContain('read 1 in');
   expect(stdout).toContain('1 to go');
 });
+
+test('list-gyazo prints one URL per line and puts coverage on stderr', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 2,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+      { id: 'b', title: 'two', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+  const env = {
+    COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
+    COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
+  };
+  const replies = {
+    listPages: JSON.stringify(listing),
+    readPage: JSON.stringify({
+      links: [],
+      lines: [{ text: 'https://gyazo.com/aaa and https://example.com/b' }],
+    }),
+  };
+
+  runCli(ws, ['crawl'], { env, replies });
+  const { stdout, stderr, status } = runCli(ws, ['list-gyazo'], { env, replies });
+
+  expect(status).toBe(0);
+  // stdout is URLs only, so the command pipes into something else.
+  expect(stdout).toBe('https://gyazo.com/aaa\n');
+  expect(stderr).toContain('2 found on 2 pages');
+  expect(stderr).not.toContain('warning');
+});
+
+test('list-gyazo warns when the crawl is incomplete', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 2,
+    pages: [
+      { id: 'a', title: 'one', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+      { id: 'b', title: 'two', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+  const env = {
+    COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
+    COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
+  };
+  const replies = {
+    listPages: JSON.stringify(listing),
+    readPage: JSON.stringify({ links: [], lines: [{ text: 'https://gyazo.com/aaa' }] }),
+  };
+
+  runCli(ws, ['crawl', '--budget', '1'], { env, replies });
+  const { stderr } = runCli(ws, ['list-gyazo'], { env, replies });
+
+  // Half the project read, so the list is half an answer and says so.
+  expect(stderr).toContain('1 of 2 page bodies have been read');
+  expect(stderr).toContain('not the whole project');
+});
+
+test('list-urls --with-page keeps the page each URL came from', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 1,
+    pages: [
+      { id: 'a', title: '地図の話', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 1, charsCount: 1, pin: 0 },
+    ],
+  };
+  const env = {
+    COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki',
+    COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache`,
+  };
+  const replies = {
+    listPages: JSON.stringify(listing),
+    readPage: JSON.stringify({ links: [], lines: [{ text: 'https://gyazo.com/aaa' }] }),
+  };
+
+  runCli(ws, ['crawl'], { env, replies });
+  const { stdout } = runCli(ws, ['list-urls', '--with-page'], { env, replies });
+
+  expect(stdout).toBe('https://gyazo.com/aaa\t地図の話\n');
+});

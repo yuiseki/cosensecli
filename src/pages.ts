@@ -330,9 +330,38 @@ export type CrawlReport = {
 };
 
 function isCurrent(cached: CachedPage | null, entry: IndexEntry): boolean {
+  if (cached === null || cached.updated === '') return false;
+  // An entry written before `urls` existed carries no URLs, which is not the
+  // same as a page with none. Treating it as stale re-reads it rather than
+  // answering "no Gyazo images here" from a record that never looked.
+  if (!Array.isArray(cached.urls)) return false;
   // Equality on the token, not a comparison: the token is opaque, and the
   // only question is whether the page has moved since it was cached.
-  return cached !== null && cached.updated !== '' && cached.updated === entry.updated;
+  return cached.updated === entry.updated;
+}
+
+/**
+ * Every http(s) URL in a page body.
+ *
+ * Cosense writes a bare URL, or wraps it in brackets alone or with a label
+ * (`[https://... title]`), so the terminators are whitespace and the bracket
+ * characters. A trailing comma or full stop is left on: it is part of the URL
+ * often enough that stripping it would break more than it fixed, and callers
+ * that care can normalise.
+ */
+export function extractUrls(lines: { text?: unknown }[]): string[] {
+  const found: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    if (typeof line?.text !== 'string') continue;
+    for (const match of line.text.match(/https?:\/\/[^\s\[\]()<>"']+/g) ?? []) {
+      if (!seen.has(match)) {
+        seen.add(match);
+        found.push(match);
+      }
+    }
+  }
+  return found;
 }
 
 /**
@@ -374,13 +403,15 @@ export function crawlLinks(
     try {
       if (fetched > 0) sleepSync(delayMs);
       const { stdout } = run('readPage', [url]);
-      const page = JSON.parse(stdout) as { links?: unknown };
+      const page = JSON.parse(stdout) as { links?: unknown; lines?: unknown };
       const links = Array.isArray(page.links) ? page.links.map(String) : [];
+      const lines = Array.isArray(page.lines) ? (page.lines as { text?: unknown }[]) : [];
       savePage(projectUrl, {
         id: entry.id,
         title: entry.title,
         updated: entry.updated,
         links,
+        urls: extractUrls(lines),
         cachedAt: new Date().toISOString(),
       });
       fetched += 1;
@@ -416,4 +447,59 @@ export function knownLinkCounts(
     }
   }
   return counts;
+}
+
+
+/** One external URL, and the page it was found on. */
+export type PageUrl = {
+  title: string;
+  id: string;
+  url: string;
+};
+
+/**
+ * Every URL from the pages whose cached body is still current.
+ *
+ * `host` narrows by hostname suffix, so `gyazo.com` also matches
+ * `i.gyazo.com` and `nota.gyazo.com`, which are the same service under
+ * different names and would be missed by an exact comparison.
+ */
+export function collectUrls(
+  projectUrl: string,
+  index: ProjectIndex,
+  options: { host?: string } = {},
+): PageUrl[] {
+  const suffix = options.host?.toLowerCase();
+  const found: PageUrl[] = [];
+
+  for (const entry of index.pages) {
+    const cached = loadPage(projectUrl, entry.id);
+    if (!isCurrent(cached, entry)) continue;
+    for (const url of cached!.urls) {
+      if (suffix !== undefined) {
+        let host: string;
+        try {
+          host = new URL(url).hostname.toLowerCase();
+        } catch {
+          continue;
+        }
+        if (host !== suffix && !host.endsWith(`.${suffix}`)) continue;
+      }
+      found.push({ title: entry.title, id: entry.id, url });
+    }
+  }
+
+  return found;
+}
+
+/** How many pages have a current cached body, and how many are still missing. */
+export function bodyCoverage(
+  projectUrl: string,
+  index: ProjectIndex,
+): { known: number; total: number } {
+  let known = 0;
+  for (const entry of index.pages) {
+    if (isCurrent(loadPage(projectUrl, entry.id), entry)) known += 1;
+  }
+  return { known, total: index.pages.length };
 }

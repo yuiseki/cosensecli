@@ -165,6 +165,15 @@ export type CachedPage = {
   updated: string;
   /** Outgoing links, which are a property of this page's body alone. */
   links: string[];
+  /**
+   * Every http(s) URL in the body, in the order it appears.
+   *
+   * Stored whole rather than filtered to the kind being asked about today.
+   * Reading the bodies of a few thousand pages is half an hour, and it is the
+   * same half hour whichever subset is kept, so keeping only Gyazo links would
+   * have bought a second crawl the first time anything else was wanted.
+   */
+  urls: string[];
   cachedAt: string;
 };
 
