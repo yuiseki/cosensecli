@@ -2,10 +2,13 @@
 /**
  * The entry point.
  *
- * This package is an MCP server first: the `cosense` CLI it wraps is already a
- * complete command line, and duplicating its commands here would be a second
- * place for them to drift. So there is no command set, only the server and
- * enough around it to see whether the server will work.
+ * Both front ends live here and in mcp.ts, and neither holds an
+ * implementation: every capability is a function in operations.ts that both
+ * call. The thing worth not duplicating was never the entry point but the
+ * knowledge of which `cosense` command answers a question, and that is in one
+ * place, testable without either front end. A parity test holds the two to the
+ * same invocation and the same output, because front ends that drift apart do
+ * so silently, each one's own tests still passing.
  */
 import { READ_ONLY_COMMANDS, resolveCosenseBin, runCosense } from './cosense';
 import {
@@ -17,6 +20,8 @@ import {
 } from './defaults';
 import { configPath, loadConfig, saveConfig } from './config';
 import { bodyCoverage, collectUrls, crawlLinks, getIndex } from './pages';
+import * as operations from './operations';
+import type { RankParams } from './operations';
 
 function cliVersion(): string {
   return require('../package.json').version as string;
@@ -40,6 +45,21 @@ Usage:
                              the same, narrowed to Gyazo
   cosensecli --version
   cosensecli --help
+
+Reading Cosense. Each is the command of the same name the MCP server offers as
+a tool, running the same code; --project applies the default project when it
+is left off.
+
+  cosensecli read <title|pageUrl>              a page, whole
+  cosensecli related <title|pageUrl>           the pages around one
+  cosensecli search <query> [--or] [--sort <pageRank|updated>]
+  cosensecli search-vector <query>             by meaning, not by string
+  cosensecli pages [--sort <k>] [--limit <n>] [--skip <n>]
+  cosensecli changes <pageId> [--since <commitId>]
+  cosensecli file <fileUrl>                    an attachment and its text
+  cosensecli projects [<origin>]               what the credentials reach
+  cosensecli rank --by <k> [--order <desc|asc>] [--limit <n>] [--refresh]
+                  [--budget <n>]               the whole project, ordered
 
 The tools are the read-only commands of the cosense CLI:
   ${READ_ONLY_COMMANDS.join(', ')}
@@ -79,6 +99,89 @@ Environment:
   COSENSECLI_COSENSE_BIN      the cosense executable to run, instead of the
                               bundled @helpfeel/cosense-cli
 `;
+
+/**
+ * The options every reading command shares.
+ *
+ * Parsed here rather than per command so that `--project` means the same
+ * thing everywhere, which is the one thing a person will assume without
+ * checking.
+ */
+type ParsedArgs = {
+  positional: string[];
+  flags: Record<string, string | true>;
+};
+
+function parseArgs(args: string[], valued: string[]): ParsedArgs | string {
+  const positional: string[] = [];
+  const flags: Record<string, string | true> = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] as string;
+    if (!arg.startsWith('--')) {
+      positional.push(arg);
+      continue;
+    }
+    const name = arg.slice(2);
+    if (valued.includes(name)) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith('--')) {
+        return `--${name} needs a value.`;
+      }
+      flags[name] = value;
+      i += 1;
+    } else {
+      flags[name] = true;
+    }
+  }
+  return { positional, flags };
+}
+
+function toNumber(value: string | true | undefined, name: string): number | undefined | string {
+  if (value === undefined) return undefined;
+  if (value === true) return `--${name} needs a number.`;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return `--${name} needs a number, not ${value}.`;
+  return parsed;
+}
+
+/**
+ * Runs one operation and prints what it returned.
+ *
+ * The same functions the MCP tools call, so the two front ends cannot drift:
+ * a change to how a question is answered reaches both, and the one place to
+ * test it is neither of them.
+ */
+function readingCommand(
+  args: string[],
+  valued: string[],
+  build: (parsed: ParsedArgs) => string,
+): number {
+  const parsed = parseArgs(args, valued);
+  if (typeof parsed === 'string') {
+    process.stderr.write(`${parsed}\n`);
+    return 2;
+  }
+  try {
+    process.stdout.write(`${build(parsed).replace(/\n?$/, '\n')}`);
+    return 0;
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
+/**
+ * A page named either way.
+ *
+ * Anything starting with http is a URL and everything else is a title, which
+ * is how a person refers to a page out loud and what search hands back.
+ */
+function pageTarget(given: string | undefined, project?: string) {
+  if (given === undefined) return undefined;
+  return /^https?:\/\//i.test(given)
+    ? { pageUrl: given, projectUrl: project }
+    : { title: given, projectUrl: project };
+}
 
 /** Reads and writes the stored settings. */
 function config(args: string[]): number {
@@ -366,6 +469,115 @@ if (command !== undefined && MCP_INVOCATIONS.has(command)) {
   process.exit(listUrls(process.argv.slice(3)));
 } else if (command === 'list-gyazo') {
   process.exit(listUrls(process.argv.slice(3), GYAZO_HOST));
+} else if (command === 'read' || command === 'related') {
+  process.exit(
+    readingCommand(process.argv.slice(3), ['project'], ({ positional, flags }) => {
+      const target = pageTarget(positional[0], flags.project as string | undefined);
+      if (target === undefined) {
+        throw new Error(`Usage: cosensecli ${command} <title|pageUrl> [--project <name|url>]`);
+      }
+      return command === 'read'
+        ? operations.browsePage(target)
+        : operations.browseRelatedPages(target);
+    }),
+  );
+} else if (command === 'search' || command === 'search-vector') {
+  process.exit(
+    readingCommand(process.argv.slice(3), ['project', 'sort'], ({ positional, flags }) => {
+      const query = positional.join(' ').trim();
+      if (query === '') {
+        throw new Error(`Usage: cosensecli ${command} <query> [--project <name|url>]`);
+      }
+      const projectUrl = flags.project as string | undefined;
+      return command === 'search'
+        ? operations.search({
+            projectUrl,
+            query,
+            or: flags.or === true,
+            sort: flags.sort as 'pageRank' | 'updated' | undefined,
+          })
+        : operations.searchVector({ projectUrl, query });
+    }),
+  );
+} else if (command === 'pages') {
+  process.exit(
+    readingCommand(
+      process.argv.slice(3),
+      ['project', 'sort', 'limit', 'skip'],
+      ({ positional, flags }) => {
+        const limit = toNumber(flags.limit, 'limit');
+        if (typeof limit === 'string') throw new Error(limit);
+        const skip = toNumber(flags.skip, 'skip');
+        if (typeof skip === 'string') throw new Error(skip);
+        return operations.listPages({
+          projectUrl: (flags.project as string | undefined) ?? positional[0],
+          sort: flags.sort as string | undefined,
+          limit,
+          skip,
+        });
+      },
+    ),
+  );
+} else if (command === 'changes') {
+  process.exit(
+    readingCommand(process.argv.slice(3), ['project', 'since'], ({ positional, flags }) => {
+      const pageId = positional[0];
+      if (pageId === undefined) {
+        throw new Error('Usage: cosensecli changes <pageId> [--since <commitId>]');
+      }
+      return operations.pageChanges({
+        projectUrl: flags.project as string | undefined,
+        pageId,
+        since: flags.since as string | undefined,
+      });
+    }),
+  );
+} else if (command === 'file') {
+  process.exit(
+    readingCommand(process.argv.slice(3), ['project'], ({ positional, flags }) => {
+      const fileUrl = positional[0];
+      if (fileUrl === undefined) {
+        throw new Error('Usage: cosensecli file <fileUrl> [--project <name|url>]');
+      }
+      return operations.readFileInfo({
+        fileUrl,
+        projectUrl: flags.project as string | undefined,
+      });
+    }),
+  );
+} else if (command === 'projects') {
+  process.exit(
+    readingCommand(process.argv.slice(3), [], ({ positional }) =>
+      operations.listProjects({ origin: positional[0] }),
+    ),
+  );
+} else if (command === 'rank') {
+  process.exit(
+    readingCommand(
+      process.argv.slice(3),
+      ['project', 'by', 'order', 'limit', 'budget'],
+      ({ flags }) => {
+        const by = flags.by;
+        if (by === undefined || by === true) {
+          throw new Error(
+            'Usage: cosensecli rank --by <lines|chars|linked|links|views|updated|created|title>',
+          );
+        }
+        const limit = toNumber(flags.limit, 'limit');
+        if (typeof limit === 'string') throw new Error(limit);
+        const budget = toNumber(flags.budget, 'budget');
+        if (typeof budget === 'string') throw new Error(budget);
+        return operations.rank({
+          projectUrl: flags.project as string | undefined,
+          by: by as RankParams['by'],
+          order: flags.order as 'desc' | 'asc' | undefined,
+          limit,
+          budget,
+          refresh: flags.refresh === true,
+        });
+      },
+    ),
+  );
 } else {
   process.stderr.write(`unknown command: ${command}\nSee \`cosensecli --help\`.\n`);
   process.exit(2);

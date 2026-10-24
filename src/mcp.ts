@@ -20,23 +20,11 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { CosenseCommandError, resolveCosenseBin, runCosense } from './cosense';
-import {
-  DEFAULT_PROJECT_ENV,
-  defaultProjectUrl,
-  encodeTitleForUrl,
-  resolvePageUrl,
-  resolveProjectUrl,
-} from './defaults';
-import {
-  DEFAULT_CRAWL_BUDGET,
-  crawlLinks,
-  getIndex,
-  knownLinkCounts,
-  rankPages,
-  rankableCount,
-  type RankKey,
-} from './pages';
+import { resolveCosenseBin } from './cosense';
+import * as operations from './operations';
+import type { RankParams } from './operations';
+import { DEFAULT_PROJECT_ENV, defaultProjectUrl } from './defaults';
+import { DEFAULT_CRAWL_BUDGET } from './pages';
 
 function serverVersion(): string {
   // The published tarball always contains package.json, and dist/ sits one
@@ -45,15 +33,6 @@ function serverVersion(): string {
 }
 
 const DEFAULT_ORIGIN = 'https://scrapbox.io';
-
-/**
- * The Cosense host to ask about when none was named. A default project on a
- * self-hosted instance makes that instance the one to ask, not scrapbox.io.
- */
-function defaultOrigin(): string {
-  const project = defaultProjectUrl();
-  return project === undefined ? DEFAULT_ORIGIN : new URL(project).origin;
-}
 
 /**
  * The note every page- or project-addressed tool carries.
@@ -123,57 +102,19 @@ function errorResult(error: unknown): ToolResult {
 }
 
 /**
- * Runs one command and turns a failure into an error on that call.
+ * Turns one operation into a tool result.
  *
  * A tool must answer a bad argument rather than take the process down, and an
  * HTTP 401 or 403 from a private project is an ordinary answer here: the
  * server is allowed to run with no credentials at all, because a public
  * project reads fine without them.
  */
-function call(command: string, args: string[]) {
+function answer(run: () => string): ToolResult {
   try {
-    const { stdout } = runCosense(command, args);
-    const text = stdout.trim();
-    return textResult(text === '' ? '(the command returned nothing)' : stdout);
-  } catch (error) {
-    if (error instanceof CosenseCommandError) {
-      return errorResult(error);
-    }
-    return errorResult(error);
-  }
-}
-
-/**
- * Builds a command and runs it, turning an argument problem into an error on
- * that call. Resolving the project or the page can fail before anything runs,
- * and a client needs to read why.
- */
-function attempt(build: () => { command: string; args: string[] }) {
-  try {
-    const { command, args } = build();
-    return call(command, args);
+    return textResult(run());
   } catch (error) {
     return errorResult(error);
   }
-}
-
-/**
- * Like `attempt`, for a tool that produces its answer here rather than by
- * running a command. The failure path has to be the same one, so that a bad
- * argument reads alike whichever kind of tool it reached.
- */
-function attemptDirect(build: () => string): ToolResult {
-  try {
-    return textResult(build());
-  } catch (error) {
-    return errorResult(error);
-  }
-}
-
-/** Appends `flag value` only when the value was given. */
-function optional(args: string[], flag: string, value: string | number | undefined): void {
-  if (value === undefined) return;
-  args.push(flag, String(value));
 }
 
 /**
@@ -219,80 +160,6 @@ function logged<Args>(
   };
 }
 
-/**
- * Ranking by outgoing links, which needs every page body read.
- *
- * Reports coverage rather than pretending to a whole-project answer: a top ten
- * drawn from a fifth of the project is a real answer about that fifth, and a
- * misleading one about the project, so the difference is stated rather than
- * left for the reader to assume.
- */
-function rankByOutgoingLinks(
-  project: string,
-  index: ReturnType<typeof getIndex>['index'],
-  options: {
-    order?: 'desc' | 'asc';
-    limit?: number;
-    budget?: number;
-    refreshed: boolean;
-    ageSeconds: number;
-  },
-): string {
-  const report = crawlLinks(project, index, { budget: options.budget });
-  const counts = knownLinkCounts(project, index);
-
-  if (counts.length === 0) {
-    throw new Error(
-      `No page body of ${project} has been read yet, so outgoing links cannot ` +
-        'be ranked. This reads the project a bite at a time; call again to ' +
-        `continue (${report.failed > 0 ? `${report.failed} failed to read, ` : ''}` +
-        `${report.remaining} pages still to read).`,
-    );
-  }
-
-  const direction = (options.order ?? 'desc') === 'asc' ? 1 : -1;
-  const rows = [...counts]
-    .sort((left, right) => {
-      if (left.links === right.links) {
-        return left.entry.title.localeCompare(right.entry.title, 'ja');
-      }
-      return (left.links < right.links ? -1 : 1) * direction;
-    })
-    .slice(0, options.limit ?? 20);
-
-  const coverage = ((counts.length / index.pages.length) * 100).toFixed(1);
-  const header = [
-    `project: ${project}`,
-    `pages in project: ${index.count}`,
-    `pages in index: ${index.pages.length}`,
-    `ranked by: links ${options.order ?? 'desc'}`,
-    `bodies read: ${counts.length} of ${index.pages.length} (${coverage}%)` +
-      `${report.remaining > 0 ? `, ${report.remaining} to go` : ', complete'}`,
-    `this call read: ${report.fetched}${report.failed > 0 ? ` (${report.failed} failed)` : ''}`,
-    `index: ${options.refreshed ? 'just walked' : `${Math.round(options.ageSeconds)}s old`}`,
-    '',
-  ];
-  if (report.remaining > 0) {
-    header.splice(
-      5,
-      0,
-      'note: this ranking covers the pages read so far, not the whole project.',
-    );
-  }
-
-  const body = rows.map((row, position) => {
-    const url = `${project}/${encodeTitleForUrl(row.entry.title)}`;
-    return (
-      `${position + 1}. ${row.entry.title}\n` +
-      `   links out ${row.links} / linked in ${row.entry.linked} / ` +
-      `lines ${row.entry.linesCount}\n` +
-      `   ${url}`
-    );
-  });
-
-  return `${header.join('\n')}${body.join('\n')}`;
-}
-
 export function buildServer(): McpServer {
   const server = new McpServer(
     { name: 'cosensecli', version: serverVersion() },
@@ -313,10 +180,10 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_browse_page', async ({ page_url, title, project_url }) =>
-        attempt(() => ({
-          command: 'browsePage',
-          args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
-        })),),
+      answer(() =>
+        operations.browsePage({ pageUrl: page_url, title, projectUrl: project_url }),
+      ),
+    ),
   );
 
   server.registerTool(
@@ -333,10 +200,10 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_browse_related_pages', async ({ page_url, title, project_url }) =>
-        attempt(() => ({
-          command: 'browseRelatedPages',
-          args: [resolvePageUrl({ pageUrl: page_url, title, projectUrl: project_url })],
-        })),),
+      answer(() =>
+        operations.browseRelatedPages({ pageUrl: page_url, title, projectUrl: project_url }),
+      ),
+    ),
   );
 
   server.registerTool(
@@ -359,12 +226,8 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_search', async ({ project_url, query, or, sort }) =>
-        attempt(() => {
-          const args = [resolveProjectUrl(project_url), query];
-          if (or) args.push('--or');
-          optional(args, '--sort', sort);
-          return { command: 'searchFullText', args };
-        }),),
+      answer(() => operations.search({ projectUrl: project_url, query, or, sort })),
+    ),
   );
 
   server.registerTool(
@@ -383,10 +246,8 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_search_vector', async ({ project_url, query }) =>
-        attempt(() => ({
-          command: 'searchVector',
-          args: [resolveProjectUrl(project_url), query],
-        })),),
+      answer(() => operations.searchVector({ projectUrl: project_url, query })),
+    ),
   );
 
   server.registerTool(
@@ -409,13 +270,8 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_list_pages', async ({ project_url, sort, limit, skip }) =>
-        attempt(() => {
-          const args = [resolveProjectUrl(project_url)];
-          optional(args, '--sort', sort);
-          optional(args, '--limit', limit);
-          optional(args, '--skip', skip);
-          return { command: 'listPages', args };
-        }),),
+      answer(() => operations.listPages({ projectUrl: project_url, sort, limit, skip })),
+    ),
   );
 
   server.registerTool(
@@ -438,11 +294,10 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_page_changes', async ({ project_url, page_id, since }) =>
-        attempt(() => {
-          const args = [resolveProjectUrl(project_url), page_id];
-          optional(args, '--since', since);
-          return { command: 'browsePageChanges', args };
-        }),),
+      answer(() =>
+        operations.pageChanges({ projectUrl: project_url, pageId: page_id, since }),
+      ),
+    ),
   );
 
   server.registerTool(
@@ -463,14 +318,8 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_read_file_info', async ({ file_url, project_url }) =>
-        attempt(() => {
-          const args = [file_url];
-          // The default project applies here too: a file URL carries no project,
-          // and a private one needs to be told which project may read it.
-          const project = project_url ?? defaultProjectUrl();
-          optional(args, '--project', project);
-          return { command: 'readFileInfo', args };
-        }),),
+      answer(() => operations.readFileInfo({ fileUrl: file_url, projectUrl: project_url })),
+    ),
   );
 
   server.registerTool(
@@ -521,54 +370,16 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_rank_pages', async ({ project_url, by, order, limit, refresh, budget }) =>
-      attemptDirect(() => {
-        const project = resolveProjectUrl(project_url);
-        const { index, refreshed, ageSeconds } = getIndex(project, { refresh });
-
-        if (by === 'links') {
-          return rankByOutgoingLinks(project, index, {
-            order,
-            limit,
-            budget,
-            refreshed,
-            ageSeconds,
-          });
-        }
-
-        const key = by as RankKey;
-        const measurable = rankableCount(index, key);
-
-        // A key nothing carries is a broken ranking, not an empty one, and
-        // returning no rows would read as "the project has no such pages".
-        if (measurable === 0) {
-          throw new Error(
-            `No page in ${project} carries a usable ${by} value, so it cannot be ` +
-              'ranked by that. Try refresh: true, or rank by lines, chars, ' +
-              'linked or views, which come straight from the page list.',
-          );
-        }
-
-        const rows = rankPages(index, key, { order, limit });
-        const header = [
-          `project: ${project}`,
-          `pages in project: ${index.count}`,
-          `pages in index: ${index.pages.length}${index.truncated ? ' (partial: the walk hit its request budget)' : ''}`,
-          `ranked by: ${by} ${order ?? (by === 'title' ? 'asc' : 'desc')}`,
-          `measurable by ${by}: ${measurable}${measurable < index.pages.length ? ` of ${index.pages.length}` : ''}`,
-          `index: ${refreshed ? 'just walked' : `${Math.round(ageSeconds)}s old`}`,
-          '',
-        ];
-        const body = rows.map((entry, position) => {
-          const url = `${project}/${encodeTitleForUrl(entry.title)}`;
-          return (
-            `${position + 1}. ${entry.title}\n` +
-            `   lines ${entry.linesCount} / chars ${entry.charsCount} / ` +
-            `linked ${entry.linked} / views ${entry.views}\n` +
-            `   ${url}`
-          );
-        });
-        return `${header.join('\n')}${body.join('\n')}`;
-      }),
+      answer(() =>
+        operations.rank({
+          projectUrl: project_url,
+          by: by as RankParams['by'],
+          order,
+          limit,
+          refresh,
+          budget,
+        }),
+      ),
     ),
   );
 
@@ -590,10 +401,8 @@ export function buildServer(): McpServer {
       annotations: READ_ONLY_ANNOTATIONS,
     },
     logged('cosense_list_projects', async ({ origin }) =>
-        attempt(() => ({
-          command: 'listProjects',
-          args: [origin ?? defaultOrigin()],
-        })),),
+      answer(() => operations.listProjects({ origin })),
+    ),
   );
 
   return server;

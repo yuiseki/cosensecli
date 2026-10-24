@@ -251,6 +251,31 @@ Under systemd that is the audit trail. It also means the titles and search
 terms a model asked about are written to the journal, which is worth knowing
 before pointing this at a private wiki.
 
+## The same things from a terminal
+
+Every tool is also a command, running the same code rather than a second copy
+of it:
+
+```bash
+cosensecli read "地図 と AI"          # cosense_browse_page
+cosensecli related 地図               # cosense_browse_related_pages
+cosensecli search 地図 --or           # cosense_search
+cosensecli search-vector 地図         # cosense_search_vector
+cosensecli pages --sort linked        # cosense_list_pages
+cosensecli changes <pageId>           # cosense_page_changes
+cosensecli file <fileUrl>             # cosense_read_file_info
+cosensecli projects                   # cosense_list_projects
+cosensecli rank --by lines            # cosense_rank_pages
+```
+
+`read` and `related` take a title or a URL, told apart by the scheme, since a
+title is how a page is named out loud and what search hands back. `--project`
+does what `project_url` does, down to accepting a bare name.
+
+A test runs each pair and asserts they build the same `cosense` invocation and
+return the same text. Two front ends over one implementation drift silently
+otherwise, because each one's own tests keep passing.
+
 ## What it will not do
 
 The `cosense` CLI can edit, delete and upload. None of that is reachable here.

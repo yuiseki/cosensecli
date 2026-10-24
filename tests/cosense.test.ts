@@ -435,3 +435,123 @@ test('crawl is an alias of sync, and says nothing about being one', () => {
   // a name that is not going anywhere.
   expect(stderr).not.toContain('sync');
 });
+
+/**
+ * The reading commands and the MCP tools are the same code with two front
+ * ends. These check the CLI half: that it builds the same cosense invocation
+ * the tool does, and that the shared conveniences reach it.
+ */
+const READING_ENV = { COSENSECLI_DEFAULT_PROJECT: 'https://scrapbox.io/yuiseki' };
+
+test('read takes a title, because that is how a page is named out loud', () => {
+  const ws = createTempWorkspace();
+  const { stdout, status } = runCli(ws, ['read', '地図 と AI'], {
+    env: READING_ENV,
+    replies: { browsePage: '# 地図 と AI\n\n本文' },
+  });
+
+  expect(status).toBe(0);
+  expect(stdout).toContain('本文');
+  expect(stubCalls(ws)).toEqual([['browsePage', 'https://scrapbox.io/yuiseki/地図_と_AI']]);
+});
+
+test('read takes a URL too, told apart by the scheme', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['read', 'https://scrapbox.io/help-jp/Cosense'], { env: READING_ENV });
+
+  expect(stubCalls(ws)).toEqual([['browsePage', 'https://scrapbox.io/help-jp/Cosense']]);
+});
+
+test('search builds the same invocation the tool does', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['search', '地図', 'AI', '--or', '--sort', 'updated'], { env: READING_ENV });
+
+  // Several words become one query, as typing them without quotes implies.
+  expect(stubCalls(ws)).toEqual([
+    ['searchFullText', 'https://scrapbox.io/yuiseki', '地図 AI', '--or', '--sort', 'updated'],
+  ]);
+});
+
+test('--project overrides the default, the same way project_url does', () => {
+  const ws = createTempWorkspace();
+  runCli(ws, ['search', '地図', '--project', 'help-jp'], { env: READING_ENV });
+
+  // A bare name works here too, since it goes through the same resolver.
+  expect(stubCalls(ws)).toEqual([
+    ['searchFullText', 'https://scrapbox.io/help-jp', '地図'],
+  ]);
+});
+
+test('pages, changes, file and projects reach their commands', () => {
+  const ws = createTempWorkspace();
+
+  runCli(ws, ['pages', '--sort', 'linked', '--limit', '5'], { env: READING_ENV });
+  runCli(ws, ['changes', 'abc123', '--since', 'commit9'], { env: READING_ENV });
+  runCli(ws, ['file', 'https://scrapbox.io/files/abc.png'], { env: READING_ENV });
+  runCli(ws, ['projects'], { env: READING_ENV });
+
+  expect(stubCalls(ws)).toEqual([
+    ['listPages', 'https://scrapbox.io/yuiseki', '--sort', 'linked', '--limit', '5'],
+    ['browsePageChanges', 'https://scrapbox.io/yuiseki', 'abc123', '--since', 'commit9'],
+    ['readFileInfo', 'https://scrapbox.io/files/abc.png', '--project', 'https://scrapbox.io/yuiseki'],
+    // The origin follows the default project rather than assuming scrapbox.io.
+    ['listProjects', 'https://scrapbox.io'],
+  ]);
+});
+
+test('rank answers the question the cosense CLI cannot', () => {
+  const ws = createTempWorkspace();
+  const listing = {
+    count: 2,
+    pages: [
+      { id: 'a', title: 'short', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 4, charsCount: 40, pin: 0 },
+      { id: 'b', title: 'long', updated: '2025-01-01T00:00+09:00 (a year ago)', created: '2020-01-01T00:00+09:00 (6 years ago)', linked: 0, views: 0, linesCount: 191, charsCount: 5176, pin: 0 },
+    ],
+  };
+
+  const { stdout, status } = runCli(ws, ['rank', '--by', 'lines', '--limit', '2'], {
+    env: { ...READING_ENV, COSENSECLI_CACHE_DIR: `${ws.rootDir}/cache` },
+    replies: { listPages: JSON.stringify(listing) },
+  });
+
+  expect(status).toBe(0);
+  expect(stdout).toContain('ranked by: lines desc');
+  expect(stdout.indexOf('long')).toBeLessThan(stdout.indexOf('short'));
+});
+
+test('rank without --by says what the keys are', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['rank'], { env: READING_ENV });
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('--by <lines|chars|linked|links');
+});
+
+test('a reading command with no default project says how to set one', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['search', '地図']);
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('config set default-project');
+  // Nothing ran: the problem was found before a process was started.
+  expect(stubCalls(ws)).toEqual([]);
+});
+
+test('an HTTP error from the CLI underneath exits 1 with its message', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['read', '秘密'], {
+    env: READING_ENV,
+    replies: { browsePage: 'EXIT:1:HTTP 401 Unauthorized' },
+  });
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('HTTP 401');
+});
+
+test('a numeric option that is not a number is refused', () => {
+  const ws = createTempWorkspace();
+  const { status, stderr } = runCli(ws, ['pages', '--limit', 'many'], { env: READING_ENV });
+
+  expect(status).toBe(1);
+  expect(stderr).toContain('--limit needs a number');
+});
