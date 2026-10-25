@@ -10,6 +10,9 @@ you translating each question into a command.
 
 It reads. It does not write. See [what it will not do](#what-it-will-not-do).
 
+Requires Node.js 24.22.1 or 26.12.1 or newer within those release lines.
+These minimum versions include the October 2026 security fixes.
+
 ## How it relates to the cosense CLI
 
 This package holds no knowledge of the Cosense API. All of it is in

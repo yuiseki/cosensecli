@@ -3,10 +3,10 @@
  *
  * 24 is what `@helpfeel/cosense-cli` declares, and this package runs it as a
  * child process with the same interpreter, so the floor cannot be lower than
- * the thing it spawns. Below it the failure surfaces from inside the child,
- * where the message is about a package the user never installed directly.
+ * the thing it spawns. This floor also includes the October 2026 security
+ * release for the supported 24.x line.
  */
-export const MINIMUM_NODE = '24.0.0';
+export const MINIMUM_NODE = '24.22.1';
 
 /** Compares dotted version numbers, ignoring any prerelease suffix. */
 export function isSupportedNodeVersion(
