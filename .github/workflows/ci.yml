@@ -15,10 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor is 24, which is what @helpfeel/cosense-cli declares. This
-        # package runs that CLI as a child process on the same interpreter, so
-        # it cannot support a line the thing it spawns does not.
-        node: ['24.x', '26.x']
+        # The child CLI requires Node 24+, so test the first patched releases
+        # available on the supported lines.
+        node: ['24.22.1', '26.12.1']
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -36,7 +35,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: '24.x'
+          node-version: '24.22.1'
           cache: npm
       - run: npm ci
       - name: Pack the published tarball
